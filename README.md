@@ -73,7 +73,7 @@ Jedes Kriterium hat eine ausformulierte Schwelle und ein Urteil:
 | Datenvalidierung | Eine falsch angepasste Kursreihe erzeugt eine wunderschoene und voellig erfundene Kurve. Faellt diese Zeile durch, bedeutet nichts darunter etwas. |
 | CAGR nach Kosten | 252 Round-Trips pro Jahr. Die Kostenannahme *ist* das Ergebnis. |
 | CAGR bei 5 bps Slippage | Was passiert, wenn die Auktionsausfuehrung nicht klappt. |
-| Break-even-Kosten | **Geometrisch** gerechnet. Der arithmetische Mittelwert ueberschaetzt sie jede Sitzung um etwa sigma²/2. |
+| Break-even-Kosten | **Geometrisch** gerechnet. Der arithmetische Mittelwert ueberschaetzt sie jede Sitzung um etwa sigma^2/2. |
 | Kante vs. effektiver Spread | Wenn Schlusskurse auf dem Geld- und Eroeffnungskurse auf dem Briefkurs drucken, entsteht ein voller Spread "Nachtrendite" pro Sitzung - **ganz ohne Oekonomie dahinter**. |
 | Bootstrap-Konfidenzintervall | Ein t-Test ueberschaetzt die Signifikanz bei fetten Raendern und Autokorrelation massiv. |
 | Letzte 5 Jahre | Der wichtigste Test. Viel vom historischen Effekt liegt vor der Dezimalisierung 2001. |
@@ -197,6 +197,31 @@ TradingViews eingebauter Paper-Broker kann ueberhaupt keine Auktionsorders. Wer
 die echten MOC/MOO-Orders will, nimmt den Python-Bot gegen Alpaca Paper - dafuer
 ist er da.
 
+### Wie die Pine-Skripte geprueft werden, ohne TradingView
+
+Kompilieren geht hier nicht, also machen `tests/test_pine_parity.py` und
+`scripts/pine_lint.py` das, was offline moeglich ist:
+
+- **Mechanischer Lint**: Versionsmarke, Klammerbilanz, unbeendete Strings und
+  Pines Einrueckungsregel - ein Block ist ein Vielfaches von vier Leerzeichen,
+  eine Fortsetzungszeile darf ausdruecklich **keines** sein.
+- **Mathematik-Paritaet**: Die Bar-Schleife des Indikators ist woertlich nach
+  Python uebersetzt, inklusive Pines `int / int -> int`-Semantik, und wird gegen
+  die geprueften Engine-Zahlen verglichen. Beide Ertragskurven, CAGR, Sharpe,
+  Drawdown, Mittelwert und schlimmste Nacht stimmen auf 1e-9.
+- **Der Test prueft ausserdem, dass die Transkription noch zur Quelle passt** -
+  aendert man das Pine-Skript, faellt der Test, bis die Uebersetzung nachgezogen ist.
+
+Genau dieser Paritaetstest hat einen echten Bug gefunden: `nWinOn / nBars` ist in
+Pine Ganzzahl-Division, die Trefferquote haette also auf jedem Chart konstant
+**0,0 %** angezeigt.
+
+Beide Skripte brechen ausserdem mit `runtime.error()` ab, wenn erweiterte
+Handelszeiten aktiv sind oder ein synthetischer Charttyp (Heikin Ashi, Renko,
+Range) eingestellt ist - beides erzeugt sonst plausible, aber bedeutungslose
+Zahlen statt eines sichtbaren Fehlers. Die Strategie verweigert zusaetzlich den
+Tageschart.
+
 ---
 
 ## Aufbau
@@ -248,8 +273,8 @@ Backtest. Uebrig bleiben 0,003 % - reine Ganzstueck-Rundung.
 ## Tests
 
 ```bash
-pytest -q          # 162 Tests, kein Netzwerkzugriff
-ruff check src tests
+pytest -q          # 174 Tests, kein Netzwerkzugriff
+ruff check src tests scripts
 ```
 
 Kein Test braucht ein Netz. Jede Kursreihe ist entweder synthetisch mit bekanntem
@@ -261,13 +286,14 @@ Ergebnis oder eine aufgezeichnete Provider-Antwort. Darunter:
 - ein voller 36-Jahres-Abgleich der Kalender-Regel-Engine gegen `exchange_calendars`;
 - reiner Bid-Ask-Bounce ohne echte Kante **muss** geflaggt werden, eine echte Kante **darf nicht**;
 - Neustart mitten am Tag, verpasster Cutoff, abgelehnte Order, toter Auktionsauftrag, Not-Aus waehrend eine Position offen ist;
-- eine Golden-Regression, die die Backtest-Zahlen einfriert.
+- eine Golden-Regression, die die Backtest-Zahlen einfriert;
+- Lint und Mathematik-Paritaet der beiden Pine-Skripte (siehe oben).
 
 ---
 
 ## Ehrliche Einordnung
 
-Ich habe beim Bauen mehrere eigene Fehler gefunden und korrigiert. Zwei sind der
+Ich habe beim Bauen mehrere eigene Fehler gefunden und korrigiert. Drei sind der
 Erwaehnung wert, weil sie zeigen, wo die Fallen liegen:
 
 1. **Ich hatte angenommen, die Identitaetspruefung `(1+r_cc) = (1+r_on)(1+r_id)`
@@ -281,8 +307,12 @@ Erwaehnung wert, weil sie zeigen, wo die Fallen liegen:
    enthaelt die Close-zu-Close-Reihe keinerlei Bounce. Jetzt ist Corwin-Schultz
    ueber Hoch/Tief der primaere Schaetzer.
 
+3. **Im Pine-Indikator stand `hit = nWinOn / nBars`.** Beide sind `int`, und
+   Pines `/` ist auf zwei Ganzzahlen Ganzzahl-Division - die Trefferquote haette
+   konstant 0,0 % angezeigt. Gefunden vom Paritaetstest, nicht beim Lesen.
+
 Was auch nach allen Pruefungen offen bleibt: Tagesdaten enthalten keine Quotes.
-Ob die gemessene Nachtprämie eine echte Risikoprämie ist oder daher kommt, auf
+Ob die gemessene Nachtpraemie eine echte Risikopraemie ist oder daher kommt, auf
 welcher Seite des Spreads gedruckt wird, laesst sich damit **nicht endgueltig
 entscheiden**. Dafuer braucht es Quote- oder Minutendaten. Die Regime-Tabelle ist
 die andere Haelfte der Antwort: der Artefakt schrumpft mit der Tickgroesse.

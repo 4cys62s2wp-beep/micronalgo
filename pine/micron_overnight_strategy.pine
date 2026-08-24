@@ -1,0 +1,121 @@
+//@version=6
+// =============================================================================
+//  Overnight strategy: buy the close, sell the open      micronalgo / Pine v6
+// -----------------------------------------------------------------------------
+//  READ THIS BEFORE TRUSTING THE STRATEGY TESTER
+//
+//  This script must be applied to an INTRADAY chart (1m recommended, up to 15m).
+//  On a daily chart it cannot work, and here is exactly why:
+//
+//    * with process_orders_on_close = true  a market order fills at the CLOSE of
+//      the bar on which it is submitted;
+//    * with process_orders_on_close = false a market order fills at the OPEN of
+//      the NEXT bar.
+//
+//  The strategy needs an entry at the session close and an exit at the next
+//  session's open -- one of each convention. No single daily-chart setting
+//  provides both, so on a daily chart you would silently be testing
+//  close-to-close or open-to-open instead. On a 1-minute chart the two events
+//  are different bars, so the pair is expressible.
+//
+//  RESIDUAL INACCURACY, STATED PLAINLY
+//  With process_orders_on_close = true the entry fills at the close of the last
+//  regular 1-minute bar (16:00) -- effectively the closing print -- and the exit
+//  fills at the close of the first regular bar (09:31), which is about one
+//  minute after the opening auction. That one minute is a real difference from
+//  the auction print the Python backtest uses. Expect a small divergence, and
+//  treat `overnight_vs_intraday.pine` as the exact reference.
+//
+//  TradingView's built-in paper broker cannot place market-on-close or
+//  market-on-open auction orders at all. Automation from TradingView means
+//  alerts plus webhooks on a paid plan, forwarded to a broker API. If you want
+//  the auction orders themselves, use the Python bot in this repository against
+//  Alpaca paper -- that is what it is for.
+// =============================================================================
+
+strategy("MU Overnight (close to open)", shorttitle="ON",
+     overlay              = true,
+     process_orders_on_close = true,
+     initial_capital      = 100000,
+     default_qty_type     = strategy.percent_of_equity,
+     default_qty_value    = 95,
+     commission_type      = strategy.commission.percent,
+     // Round-trip cost in bps, halved because Pine charges commission per side
+     // and converted from bps to percent. 0.3 bps approximates commission-free
+     // auction execution at retail size (SEC Section 31 + FINRA TAF only).
+     commission_value     = input.float(0.3, "Round-trip cost (bps)", minval=0.0, maxval=1000.0,
+                              step=0.1, group="Costs") / 200.0,
+     slippage             = 0,
+     calc_on_every_tick   = false,
+     currency             = currency.USD)
+
+// ------------------------------------------------------------------ inputs ---
+startDate  = input.time(timestamp("01 Jan 2016 00:00 +0000"), "Start from", group="Setup")
+allowLong  = input.bool(true,  "Long the overnight window",  group="Setup")
+shortDay   = input.bool(false, "Also short the intraday window", group="Setup",
+     tooltip="The mirror trade. Be aware: shorting intraday IS day trading, so under $25k of equity " +
+             "FINRA's pattern-day-trader rule caps you at three such round trips per five sessions. " +
+             "Borrow costs and hard-to-borrow risk also apply. Off by default for good reason.")
+
+skipEarn   = input.bool(false, "Skip a manual blackout list", group="Filters")
+blackout   = input.string("", "Blackout dates (YYYY-MM-DD, comma separated)", group="Filters",
+     tooltip="Entry dates to skip -- typically earnings report days, when the overnight gap is a " +
+             "coin flip several times larger than the edge. There is no free reliable earnings feed " +
+             "in Pine, so this is manual on purpose: a stale automatic list is worse than none.")
+
+maxGapPct  = input.float(0.0, "Skip if prior session moved more than (%)", minval=0.0, group="Filters",
+     tooltip="0 disables. Skips the session after outsized news moves.")
+
+// ------------------------------------------------------------ session logic ---
+isFirst = session.isfirstbar_regular
+isLast  = session.islastbar_regular
+inRange = time >= startDate
+
+// Previous session's close-to-close move, for the news filter.
+var float prevSessionClose = na
+var float lastSessionClose = na
+if isLast
+    prevSessionClose := lastSessionClose
+    lastSessionClose := close
+
+priorMove = not na(prevSessionClose) and prevSessionClose > 0 and not na(lastSessionClose) ? math.abs(lastSessionClose / prevSessionClose - 1.0) : 0.0
+gapOk     = maxGapPct <= 0.0 or priorMove <= maxGapPct / 100.0
+
+dateStr   = str.tostring(year) + "-" + (month < 10 ? "0" : "") + str.tostring(month) + "-" + (dayofmonth < 10 ? "0" : "") + str.tostring(dayofmonth)
+inBlackout = skipEarn and str.length(blackout) > 0 and str.contains(blackout, dateStr)
+
+canEnter = inRange and allowLong and gapOk and not inBlackout
+
+// ------------------------------------------------------------------ orders ---
+// Entry: submitted while processing the last regular bar, filled at its close.
+if isLast and canEnter
+    strategy.entry("overnight", strategy.long, comment="MOC buy")
+
+// Exit: submitted while processing the first regular bar of the next session.
+if isFirst
+    strategy.close("overnight", comment="MOO sell")
+
+// Optional mirror leg: short the intraday window.
+if shortDay
+    if isFirst and inRange
+        strategy.entry("intraday_short", strategy.short, comment="short the open")
+    if isLast
+        strategy.close("intraday_short", comment="cover at the close")
+
+// ------------------------------------------------------------------ visuals ---
+bgcolor(strategy.position_size > 0 ? color.new(#1f77b4, 92) : na, title="overnight position held")
+plotshape(isLast and canEnter,  title="entry", style=shape.triangleup,   location=location.belowbar, color=color.new(#1f77b4, 0), size=size.tiny)
+plotshape(isFirst and strategy.position_size > 0, title="exit", style=shape.triangledown, location=location.abovebar, color=color.new(#d62728, 0), size=size.tiny)
+
+var table info = table.new(position.top_right, 2, 4, border_width=1,
+     frame_color=color.new(color.gray, 60), frame_width=1)
+if barstate.islast
+    tfOk = timeframe.isintraday
+    table.cell(info, 0, 0, "timeframe", text_size=size.small, text_halign=text.align_left)
+    table.cell(info, 1, 0, tfOk ? timeframe.period : "USE 1m-15m", text_color=tfOk ? color.green : color.red, text_size=size.small, text_halign=text.align_right)
+    table.cell(info, 0, 1, "net profit", text_size=size.small, text_halign=text.align_left)
+    table.cell(info, 1, 1, str.tostring(strategy.netprofit / strategy.initial_capital * 100.0, "#,###.#") + "%", text_size=size.small, text_halign=text.align_right)
+    table.cell(info, 0, 2, "closed trades", text_size=size.small, text_halign=text.align_left)
+    table.cell(info, 1, 2, str.tostring(strategy.closedtrades), text_size=size.small, text_halign=text.align_right)
+    table.cell(info, 0, 3, "max drawdown", text_size=size.small, text_halign=text.align_left)
+    table.cell(info, 1, 3, str.tostring(strategy.max_drawdown_percent, "#.#") + "%", text_color=#d62728, text_size=size.small, text_halign=text.align_right)

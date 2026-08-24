@@ -21,11 +21,11 @@ dependencies = [
 
 [project.optional-dependencies]
 research = ["matplotlib>=3.7", "pyarrow>=14", "tabulate>=0.9"]
-live = ["apscheduler>=3.10", "exchange_calendars>=4.5"]
+live = ["apscheduler>=3.10", "exchange_calendars>=4.5", "websocket-client>=1.7"]
 dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4"]
 all = [
     "matplotlib>=3.7", "pyarrow>=14", "tabulate>=0.9",
-    "apscheduler>=3.10", "exchange_calendars>=4.5",
+    "apscheduler>=3.10", "exchange_calendars>=4.5", "websocket-client>=1.7",
     "pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4",
 ]
 

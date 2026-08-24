@@ -192,3 +192,96 @@ def test_secrets_are_redacted():
     dumped = s.redacted()
     assert "AKVERYSECRET" not in json.dumps(dumped)
     assert dumped["alpaca_key_id"].startswith("<set:")
+
+
+def test_status_watch_renders_and_terminates(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("MICRONALGO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("MICRONALGO_LOG_DIR", str(tmp_path))
+    from micronalgo.cli import build_parser
+
+    args = build_parser().parse_args(["status", "--watch", "--interval", "1"])
+    args._watch_iterations = 2
+    assert args.func(args) == 0
+    out = capsys.readouterr().out
+    assert out.count("micronalgo status") == 2
+    assert "flat (MU)" in out
+
+
+def test_mac_deploy_artifacts_are_wellformed():
+    import plistlib
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    template = (root / "deploy" / "com.micronalgo.paper.plist.template").read_text()
+    rendered = template.replace("__REPO__", "/tmp/r").replace("__VENV__", "/tmp/v")
+    plist = plistlib.loads(rendered.encode())
+    assert plist["Label"] == "com.micronalgo.paper"
+    # launchd semantics: SuccessfulExit=false restarts NON-zero exits (crashes).
+    # A halt exits 2 and is restarted once -- the startup halt-guard then exits
+    # 0, a successful exit, which launchd leaves down. The pair of assertions
+    # below covers both halves of that contract.
+    assert plist["KeepAlive"] == {"SuccessfulExit": False}
+    assert plist["ProgramArguments"][-1] == "paper"
+
+    check = subprocess.run(["sh", "-n", str(root / "deploy" / "install_mac.sh")],
+                           capture_output=True, text=True)
+    assert check.returncode == 0, check.stderr
+
+
+def test_paper_refuses_to_start_while_halted_and_exits_zero(tmp_path, monkeypatch, capsys):
+    """The other half of the launchd contract: a persisted halt must produce a
+    SUCCESSFUL exit (0), because launchd's SuccessfulExit=false would restart
+    any non-zero exit every ThrottleInterval forever."""
+    import micronalgo.live.state as st
+
+    monkeypatch.setenv("MICRONALGO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("MICRONALGO_LOG_DIR", str(tmp_path))
+    monkeypatch.setenv("MICRONALGO_CACHE_DIR", str(tmp_path))
+    state = st.BotState(symbol="MU")
+    state.halt("drawdown breach during the test")
+    st.save(state, tmp_path / "state.json")
+
+    code = main(["paper", "--max-iterations", "1"])
+    err = capsys.readouterr().err
+    assert code == 0
+    assert "HALTED" in err and "resume --clear-halt" in err
+
+
+def test_watch_tails_a_large_audit_log(tmp_path, monkeypatch, capsys):
+    """The watch view must read only the tail of an unbounded log file."""
+    monkeypatch.setenv("MICRONALGO_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("MICRONALGO_LOG_DIR", str(tmp_path))
+    audit = tmp_path / "audit.jsonl"
+    with audit.open("w") as fh:
+        for i in range(50_000):
+            fh.write(json.dumps({"ts_ny": f"2026-08-24T10:00:{i % 60:02d}", "event": f"e{i}"}) + "\n")
+
+    from micronalgo.cli import build_parser
+
+    args = build_parser().parse_args(["status", "--watch", "--interval", "1"])
+    args._watch_iterations = 1
+    assert args.func(args) == 0
+    out = capsys.readouterr().out
+    assert "e49999" in out and "e0 " not in out
+
+
+def test_installer_templating_survives_metacharacter_paths(tmp_path):
+    """A repo path like 'Trading & Bots' is legal on macOS, is a metacharacter
+    for sed (the original bug) AND is illegal raw in XML (the second layer of
+    the same bug). The installer's python templating XML-escapes, and launchd
+    reads the escaped form back as the literal path -- which this test proves
+    by round-tripping through plistlib exactly as launchd would."""
+    import plistlib
+    from pathlib import Path
+    from xml.sax.saxutils import escape
+
+    template = (Path(__file__).resolve().parents[1] / "deploy"
+                / "com.micronalgo.paper.plist.template").read_text()
+    nasty_repo = "/Users/me/Trading & Bots|x/micronalgo"
+    rendered = (template
+                .replace("__REPO__", escape(nasty_repo))
+                .replace("__VENV__", escape(nasty_repo + "/.venv")))
+    plist = plistlib.loads(rendered.encode())
+    assert plist["ProgramArguments"][0] == nasty_repo + "/.venv/bin/micronalgo"
+    assert plist["WorkingDirectory"] == nasty_repo

@@ -224,3 +224,26 @@ def test_scenario_ordering_is_reflected_in_the_report_table():
     tbl = r.by_scenario
     assert tbl.loc["frictionless", "total_return"] >= tbl.loc["auction-retail", "total_return"]
     assert tbl.loc["auction-retail", "cost_per_trade_bps"] < 1.0
+
+
+def test_metrics_handle_an_entirely_filtered_series():
+    """A signal that filters out every session must not crash the metrics."""
+    import pandas as pd
+
+    for series in (pd.Series([], dtype="float64"), pd.Series([float("nan")] * 5)):
+        m = M.compute(series)
+        assert m.n == 0
+        assert m.total_return == 0.0
+
+
+def test_study_tolerates_a_scenario_list_without_the_primary():
+    bars = random_walk(600, seed=2, start="2018-01-02")
+    r = run_study(bars, cost_scenarios=("frictionless",), bootstrap_resamples=60)
+    assert "auction-retail" in r.by_scenario.index
+
+
+def test_empty_metrics_respect_exposure_fraction():
+    import pandas as pd
+
+    m = M.compute(pd.Series([], dtype="float64"), exposure_fraction=0.25)
+    assert m.exposure_fraction == 0.25

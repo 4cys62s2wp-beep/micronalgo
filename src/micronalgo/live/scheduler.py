@@ -74,11 +74,16 @@ def run(
     max_iterations: int | None = None,
     sleeper=time.sleep,
     clock=now_ny,
+    wake: threading.Event | None = None,
 ) -> int:
     """Run until stopped. Returns the number of iterations completed.
 
     ``clock`` and ``sleeper`` are injected so the loop itself is testable
-    without waiting in real time.
+    without waiting in real time. ``wake``, when provided, lets an external
+    event source (the trade-updates websocket) cut a sleep short: the loop then
+    ticks immediately instead of at the next poll. Because ``tick()`` is
+    idempotent, a spurious wake costs one cheap no-op pass -- which is why the
+    stream can be wired in with no new state-machine logic at all.
     """
     settings = settings or bot.settings
     notifier = notifier or Notifier(settings.notify_webhook, alert_file=settings.log_dir / "alerts.log")
@@ -127,7 +132,13 @@ def run(
         iterations += 1
         if max_iterations is not None and iterations >= max_iterations:
             break
-        sleeper(sleep_seconds(bot, now))
+        pause = sleep_seconds(bot, now)
+        if wake is not None:
+            if wake.wait(timeout=pause):
+                wake.clear()
+                log.debug("woken early by an order event")
+        else:
+            sleeper(pause)
 
     log.info("stopped after %d iterations", iterations)
     return iterations

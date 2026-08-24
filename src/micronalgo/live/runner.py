@@ -31,6 +31,7 @@ What the bot will not do
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -86,6 +87,7 @@ class OvernightBot:
         bars: pd.DataFrame | None = None,
         state_path: Path | str | None = None,
         audit: AuditLog | None = None,
+        price_feed: Callable[[], float | None] | None = None,
     ) -> None:
         self.settings = settings
         self.broker = broker
@@ -95,6 +97,7 @@ class OvernightBot:
         self.audit = audit or AuditLog(Path(settings.log_dir) / "audit.jsonl")
         self.state: BotState = load(self.state_path, symbol=settings.symbol)
         self.errors = ErrorBudget(settings.api_error_budget, settings.api_error_window_min)
+        self.price_feed = price_feed
         self._reconciled_for: dt.date | None = None
 
     # ------------------------------------------------------------------ #
@@ -351,7 +354,7 @@ class OvernightBot:
 
         try:
             account = self.broker.get_account()
-            reference = self.broker.get_last_price(self.settings.symbol)
+            reference = self._reference_price()
             tradable = self.broker.is_tradable(self.settings.symbol)
         except BrokerError as exc:
             self.errors.record(now)
@@ -546,6 +549,20 @@ class OvernightBot:
             self._emit("trade_closed", trade_date=trade.trade_date, pnl=pnl, qty=qty,
                        entry=entry_px, exit=exit_px,
                        consecutive_losses=self.state.consecutive_losses)
+
+    def _reference_price(self) -> float:
+        """Sizing reference: the freshest price available.
+
+        A live websocket tick, when one is flowing and recent, beats a REST
+        round trip -- the share count for the closing-auction order is computed
+        from this number. A stale or absent feed falls straight through to the
+        broker; a live feed is an accelerator here, never a dependency.
+        """
+        if self.price_feed is not None:
+            price = self.price_feed()
+            if price is not None and price > 0:
+                return float(price)
+        return self.broker.get_last_price(self.settings.symbol)
 
     def _market_is_open(self, now: dt.datetime, session: Session) -> bool:
         return session.open_dt() <= now < session.close_dt()

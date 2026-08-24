@@ -1,0 +1,59 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  micronalgo LaunchAgent.
+
+  Installiert von deploy/install_mac.sh nach
+  ~/Library/LaunchAgents/com.micronalgo.paper.plist mit ersetzten Platzhaltern.
+
+  Warum KeepAlive statt Kalender-Timern: der Bot plant seine Auktionsfenster
+  selbst (Versaetze zur jeweiligen Sitzung, Halbtage inklusive) und sein tick()
+  ist idempotent. Ein Prozess, der einfach immer laeuft und intelligent schlaeft,
+  ist robuster als launchd-Kalendereintraege, die Halbtage nicht kennen.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.micronalgo.paper</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>__VENV__/bin/micronalgo</string>
+    <string>paper</string>
+  </array>
+
+  <key>WorkingDirectory</key>
+  <string>__REPO__</string>
+
+  <key>RunAtLoad</key>
+  <true/>
+
+  <key>KeepAlive</key>
+  <dict>
+    <!-- SuccessfulExit=false heisst bei launchd: Neustart NUR nach einem
+         NICHT-erfolgreichen (non-zero) Exit, also nach Abstuerzen. Ein Halt
+         beendet den Prozess zwar mit Code 2 und wird einmal neu gestartet,
+         aber der Start-Guard in "micronalgo paper" erkennt den persistierten
+         Halt und beendet sich mit Code 0: ein ERFOLGREICHER Exit, den launchd
+         nicht neu startet. So bleibt ein gehaltener Bot unten, bis ein Mensch
+         "micronalgo resume" mit clear-halt ausfuehrt. -->
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+
+  <key>StandardOutPath</key>
+  <string>__REPO__/logs/launchd.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>__REPO__/logs/launchd.err.log</string>
+
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

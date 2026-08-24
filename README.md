@@ -84,6 +84,18 @@ Jedes Kriterium hat eine ausformulierte Schwelle und ein Urteil:
 Das Gesamturteil ist das schlechteste Einzelurteil. `micronalgo study` gibt bei
 `FAIL` den Exit-Code 2 zurueck - das laesst sich in CI verdrahten.
 
+### Walk-Forward: der ehrliche Weg zu "profitabler"
+
+Jeder Filter mit Parametern sieht auf der Historie gut aus, an die er angepasst
+wurde - das ist die Definition von Anpassen, kein Beleg fuer eine Kante.
+`micronalgo walkforward` schliesst diese Tuer strukturell: Kandidaten-Overlays
+werden **nur auf Trainingsfenstern** ausgewaehlt und **nur auf den
+darauffolgenden, nie gesehenen Testfenstern** gemessen. Ein Overlay wird
+ausschliesslich dann empfohlen, wenn es die ungefilterte Basis dort schlaegt,
+wo es nicht angepasst wurde - und das Urteil sagt ausdruecklich "Deploy no
+filter", wenn die Overlays im Training glaenzten und im Test versagten. Die
+Voreinstellung des Bots bleibt: kein Filter.
+
 ---
 
 ## Der eine Grund, warum das ueberhaupt handelbar sein koennte
@@ -108,13 +120,43 @@ deshalb rechnet der Bericht jedes Szenario einzeln durch.
 
 ---
 
+## Auf dem Mac (komplette Software)
+
+```bash
+sh deploy/install_mac.sh --launchd
+```
+
+Ein Befehl: virtuelles Environment, alle Abhaengigkeiten, `.env`-Vorlage,
+Offline-Selbsttest, und ein LaunchAgent, der den Bot beim Login startet und
+nach einem Absturz neu anfaehrt. Ein bewusster Halt bleibt unten: der
+Start-Guard erkennt den persistierten Halt und beendet sich mit Exit-Code 0,
+den launchd nicht neu startet -- ein Halt verlangt einen Menschen. Details,
+inklusive des einen Mac-spezifischen Themas (Schlafmodus verpasst
+Auktionsfenster): `docs/MAC_SETUP.md`.
+
+### Echtzeit
+
+`micronalgo paper` verbindet sich automatisch mit zwei Alpaca-Websockets:
+Live-Trades halten den Referenzpreis fuer die Stueckzahl sekundenfrisch, und
+Order-Events wecken den Bot **sofort** -- ein toter Auktions-Exit wird in
+Sekunden eskaliert statt in Minuten. Weil `tick()` idempotent ist, brauchen die
+Streams keinerlei neue Zustandslogik: sie machen die bestehende nur schneller.
+Faellt ein Stream aus, laeuft alles ueber REST-Polling weiter (sichtbar im Log);
+die Streams sind Beschleuniger, nie Abhaengigkeiten.
+
+Und damit keine falsche Erwartung entsteht: auf die **Fill-Preise** hat
+Geschwindigkeit keinen Einfluss. Beide Legs fuellen im Auktions-Print, der fuer
+alle Teilnehmer identisch ist. "Schnellster Entry" heisst bei dieser Strategie:
+zuverlaessig in der Auktion sein -- und genau das tut der Bot.
+
 ## Der Bot
 
 ```bash
 micronalgo preflight --probe-orders   # prueft ALLES gegen Dein echtes Paper-Konto
 micronalgo paper                      # laeuft (dry_run ist standardmaessig AN)
 micronalgo paper --live               # sendet Orders ans Paper-Konto
-micronalgo status                     # was der Bot gerade glaubt
+micronalgo status --watch             # Live-Ansicht im Terminal
+micronalgo walkforward                # Filter streng out-of-sample bewerten
 micronalgo kill                       # Not-Aus
 ```
 
@@ -273,7 +315,7 @@ Backtest. Uebrig bleiben 0,003 % - reine Ganzstueck-Rundung.
 ## Tests
 
 ```bash
-pytest -q          # 174 Tests, kein Netzwerkzugriff
+pytest -q          # 203 Tests, kein Netzwerkzugriff
 ruff check src tests scripts
 ```
 

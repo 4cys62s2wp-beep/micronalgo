@@ -179,14 +179,25 @@ def compute(
     r = r_series.to_numpy()
     n = r.size
     if n == 0:
-        return Metrics(*([0] * 3), *([0.0] * 16), 0.0, 0.0, 0.0)
+        # An empty or all-NaN series (every session filtered out) must yield an
+        # explicit empty result, not a crash. Spelled out field by field rather
+        # than star-unpacked: a positional splat silently breaks the moment the
+        # dataclass grows a field, which is exactly what happened once.
+        zero = float("nan")
+        return Metrics(
+            n=0, years=0.0, total_return=0.0, cagr=zero, ann_vol=zero, sharpe=zero,
+            sortino=zero, max_drawdown=0.0, max_drawdown_days=0, calmar=zero,
+            hit_rate=zero, mean_return=zero, median_return=zero, geo_mean_return=zero,
+            skew=zero, excess_kurtosis=zero, best=zero, worst=zero, var_95=zero,
+            cvar_95=zero, var_99=zero, cvar_99=zero, psr_vs_zero=zero, t_stat=zero,
+            exposure_fraction=exposure_fraction,
+        )
 
     if equity is None:
         equity = (1.0 + r_series).cumprod()
     eq = equity.to_numpy(dtype="float64")
 
     years = n / periods_per_year
-    total = float(eq[-1] / (eq[0] / (1.0 + r[0]) if (1.0 + r[0]) != 0 else 1.0) - 1.0) if n else 0.0
     total = float(np.prod(1.0 + r) - 1.0)
     cagr = float((1.0 + total) ** (1.0 / years) - 1.0) if years > 0 and (1.0 + total) > 0 else float("nan")
 

@@ -30,7 +30,11 @@ def _add_common(p: argparse.ArgumentParser) -> None:
 
 
 def _settings(args: argparse.Namespace, **overrides) -> Settings:
-    kw = dict(overrides)
+    # None means "the flag was not given" -- e.g. the --dry-run/--live pair
+    # defaults to None so that plain `micronalgo paper` falls through to the
+    # environment/default. Passing that None into pydantic is a ValidationError,
+    # which made the unflagged invocation crash until a test caught it.
+    kw = {k: v for k, v in overrides.items() if v is not None}
     for name in ("symbol", "cache_dir", "log_level"):
         val = getattr(args, name, None)
         if val:
@@ -194,6 +198,33 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_walkforward(args: argparse.Namespace) -> int:
+    from .research.costs import scenario
+    from .research.engine import BacktestConfig
+    from .research.walkforward import walk_forward
+
+    settings = _settings(args)
+    loaded = _load_bars(args, settings)
+    print(loaded.provenance.render(), file=sys.stderr)
+
+    result = walk_forward(
+        loaded.frame,
+        config=BacktestConfig(cost=scenario(args.cost), initial_capital=settings.initial_capital),
+        train_sessions=args.train,
+        test_sessions=args.test,
+    )
+    print(result.fold_table().to_string(float_format=lambda x: f"{x:,.2f}"))
+    print()
+    print(result.verdict())
+    print()
+    print(f"deflated Sharpe (out-of-sample, {len(result.candidate_names)} candidates): "
+          f"{result.deflated_sharpe_oos():.3f}")
+    print()
+    print("Remember what this is: the ONLY curve a deployment decision may be read from is the")
+    print("out-of-sample one above. In-sample tables are how strategies get overfitted.")
+    return 0
+
+
 def cmd_preflight(args: argparse.Namespace) -> int:
     from .live.preflight import run_preflight
 
@@ -210,7 +241,9 @@ def cmd_preflight(args: argparse.Namespace) -> int:
 
 
 def cmd_paper(args: argparse.Namespace) -> int:
-    from .live.audit import AuditLog, setup_logging
+    import threading
+
+    from .live.audit import AuditLog, get_logger, setup_logging
     from .live.runner import OvernightBot
     from .live.scheduler import run
     from .live.state import InstanceLock
@@ -218,6 +251,7 @@ def cmd_paper(args: argparse.Namespace) -> int:
     settings = _settings(args, dry_run=args.dry_run)
     settings.ensure_dirs()
     setup_logging(settings.log_level, settings.log_dir)
+    logger = get_logger("cli")
 
     try:
         lock = InstanceLock(Path(settings.state_dir) / ".lock")
@@ -225,6 +259,23 @@ def cmd_paper(args: argparse.Namespace) -> int:
     except RuntimeError as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+
+    # Halt guard, and the exit code matters: launchd's KeepAlive/SuccessfulExit=false
+    # restarts NON-ZERO exits (that is what keeps the bot alive through crashes).
+    # A halt mid-run exits 2, launchd restarts once, and this check then exits 0 --
+    # a *successful* exit -- so launchd leaves the process down until a human runs
+    # `micronalgo resume --clear-halt`. Without this, a halted bot would be
+    # restarted every ThrottleInterval seconds, alert-spamming forever.
+    from .live.state import load as _load_state
+
+    pre_state = _load_state(Path(settings.state_dir) / "state.json", symbol=settings.symbol)
+    if pre_state.halted:
+        print(
+            f"bot is HALTED: {pre_state.halt_reason}\n"
+            "Refusing to start. Investigate, then run: micronalgo resume --clear-halt",
+            file=sys.stderr,
+        )
+        return 0
 
     bars = None
     try:
@@ -234,11 +285,53 @@ def cmd_paper(args: argparse.Namespace) -> int:
               file=sys.stderr)
 
     broker = _broker(settings, bars)
+
+    # ------------------------------------------------------------- streaming
+    # The websocket streams are accelerators, never dependencies: order events
+    # wake the idempotent tick immediately, live trades keep the sizing
+    # reference fresh. Any failure here degrades to plain polling, loudly.
+    wake: threading.Event | None = None
+    price_feed = None
+    workers = []
+    want_stream = getattr(args, "stream", True) and settings.broker == "alpaca"
+    if want_stream:
+        try:
+            from .live.stream import LivePrice, market_data_worker, trade_updates_worker
+
+            wake = threading.Event()
+            live_price = LivePrice()
+            workers.append(
+                market_data_worker(
+                    settings.alpaca_key_id, settings.alpaca_secret_key,
+                    settings.symbol, live_price, feed=settings.alpaca_data_feed,
+                )
+            )
+            workers.append(
+                trade_updates_worker(
+                    settings.alpaca_key_id, settings.alpaca_secret_key,
+                    settings.symbol, wake=wake, base_url=settings.alpaca_base_url,
+                )
+            )
+            for w in workers:
+                w.start()
+            price_feed = live_price.get
+            logger.info("streaming enabled: live trades (%s feed) + order events", settings.alpaca_data_feed)
+        except Exception as exc:
+            logger.warning("streaming unavailable (%s); continuing with REST polling only", exc)
+            wake, price_feed, workers = None, None, []
+    elif settings.broker == "alpaca":
+        logger.info("streaming disabled by --no-stream; REST polling only")
+
     bot = OvernightBot(
         settings, broker, calendar=_calendar(broker), bars=bars,
         audit=AuditLog(Path(settings.log_dir) / "audit.jsonl"),
+        price_feed=price_feed,
     )
-    run(bot, settings=settings, max_iterations=args.max_iterations)
+    try:
+        run(bot, settings=settings, max_iterations=args.max_iterations, wake=wake)
+    finally:
+        for w in workers:
+            w.stop()
     return 2 if bot.state.halted else 0
 
 
@@ -274,15 +367,16 @@ def cmd_tick(args: argparse.Namespace) -> int:
         lock.release()
 
 
-def cmd_status(args: argparse.Namespace) -> int:
+def _status_payload(settings: Settings) -> dict:
+    from .live.risk import kill_switch_active
     from .live.state import load as load_state
 
-    settings = _settings(args)
     state = load_state(Path(settings.state_dir) / "state.json", symbol=settings.symbol)
-    payload = {
+    return {
         "symbol": state.symbol,
         "halted": state.halted,
         "halt_reason": state.halt_reason,
+        "kill_switch": kill_switch_active(settings.kill_switch_file),
         "equity_peak": state.equity_peak,
         "consecutive_losses": state.consecutive_losses,
         "open_positions": [
@@ -292,7 +386,62 @@ def cmd_status(args: argparse.Namespace) -> int:
         "trades_tracked": len(state.trades),
         "realized_pnl": sum(t.realized_pnl or 0.0 for t in state.trades.values()),
     }
-    print(json.dumps(payload, indent=2))
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    import datetime as dt
+    import time
+
+    settings = _settings(args)
+    if not getattr(args, "watch", False):
+        print(json.dumps(_status_payload(settings), indent=2))
+        return 0
+
+    # Watch mode: a lightweight live view for a terminal left open on the Mac.
+    # Reads only local files, so it never competes with the bot for API budget.
+    audit_path = Path(settings.log_dir) / "audit.jsonl"
+    iterations = getattr(args, "_watch_iterations", None)  # test hook
+    count = 0
+    try:
+        while True:
+            payload = _status_payload(settings)
+            lines = ["\x1b[2J\x1b[H" if iterations is None else "",
+                     f"micronalgo status  {dt.datetime.now():%Y-%m-%d %H:%M:%S}",
+                     "-" * 60]
+            state_word = "HALTED" if payload["halted"] else ("KILL SWITCH" if payload["kill_switch"] else "running")
+            lines.append(f"  state         : {state_word}"
+                         + (f"  ({payload['halt_reason']})" if payload["halt_reason"] else ""))
+            if payload["open_positions"]:
+                for pos in payload["open_positions"]:
+                    lines.append(f"  position      : {pos['qty']:g} {payload['symbol']} "
+                                 f"({pos['phase']}, entered {pos['trade_date']})")
+            else:
+                lines.append(f"  position      : flat ({payload['symbol']})")
+            lines.append(f"  realized pnl  : ${payload['realized_pnl']:,.2f} "
+                         f"over {payload['trades_tracked']} tracked trades")
+            lines.append(f"  loss streak   : {payload['consecutive_losses']}")
+            if audit_path.exists():
+                # Tail only: the audit log grows without bound, and this view
+                # refreshes every few seconds for as long as a terminal is open.
+                with audit_path.open("rb") as fh:
+                    fh.seek(0, 2)
+                    fh.seek(max(fh.tell() - 16_384, 0))
+                    tail = fh.read().decode("utf-8", errors="replace").splitlines()[-5:]
+                lines.append("")
+                lines.append("  last audit events:")
+                for raw in tail:
+                    try:
+                        rec = json.loads(raw)
+                        lines.append(f"    {rec.get('ts_ny', '')[:19]}  {rec.get('event', '?')}")
+                    except json.JSONDecodeError:
+                        continue
+            print("\n".join(lines), flush=True)
+            count += 1
+            if iterations is not None and count >= iterations:
+                break
+            time.sleep(max(args.interval, 1))
+    except KeyboardInterrupt:
+        pass
     return 0
 
 
@@ -374,6 +523,18 @@ def build_parser() -> argparse.ArgumentParser:
     b.add_argument("--cost", default="auction-retail")
     b.add_argument("--leverage", type=float, default=1.0)
 
+    wf = sub.add_parser("walkforward", help="evaluate filter overlays strictly out-of-sample")
+    _add_common(wf)
+    wf.add_argument("--provider", action="append")
+    wf.add_argument("--start", default=None)
+    wf.add_argument("--end", default=None)
+    wf.add_argument("--refresh", action="store_true")
+    wf.add_argument("--offline", action="store_true")
+    wf.add_argument("--cost", default="auction-retail")
+    wf.add_argument("--train", type=int, default=756, help="training sessions per fold (default 3y)")
+    wf.add_argument("--test", type=int, default=252, help="test sessions per fold (default 1y)")
+    wf.set_defaults(func=cmd_walkforward)
+
     pf = sub.add_parser("preflight", help="verify every runtime assumption against the broker")
     _add_common(pf)
     pf.add_argument("--provider", action="append")
@@ -401,10 +562,14 @@ def build_parser() -> argparse.ArgumentParser:
                            help="actually send orders (still paper unless the base URL says otherwise)")
         if name == "paper":
             s.add_argument("--max-iterations", type=int, default=None)
+            s.add_argument("--no-stream", dest="stream", action="store_false", default=True,
+                           help="disable the websocket streams and rely on REST polling only")
         s.set_defaults(func=fn)
 
     stt = sub.add_parser("status", help="what the bot currently believes")
     _add_common(stt)
+    stt.add_argument("--watch", action="store_true", help="live view; refresh until Ctrl-C")
+    stt.add_argument("--interval", type=int, default=10, help="watch refresh seconds")
     stt.set_defaults(func=cmd_status)
 
     k = sub.add_parser("kill", help="engage the kill switch")

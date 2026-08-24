@@ -148,6 +148,12 @@ def run_study(
     recent_years: int = 5,
 ) -> StudyResult:
     """Compute everything the report needs."""
+    if primary_scenario not in cost_scenarios:
+        # Every downstream section (monte carlo, drawdown chart, reality check)
+        # reads results[primary_scenario]; a custom scenario list that omits it
+        # would KeyError three functions later with no hint why.
+        cost_scenarios = (*cost_scenarios, primary_scenario)
+
     dec = decompose(bars)
     frame = dec.frame
     r_on, r_id, r_cc = frame["r_on"], frame["r_id"], frame["r_cc"]

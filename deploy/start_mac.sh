@@ -15,23 +15,60 @@ VENV="$REPO/.venv"
 BIN="$VENV/bin/micronalgo"
 cd "$REPO"
 
+# Eingaben kommen von /dev/tty, nicht von stdin -- sonst funktioniert keine
+# Rueckfrage, wenn das Skript selbst ueber eine Pipe kommt (`curl ... | sh`).
+if [ -r /dev/tty ]; then TTY_EARLY=/dev/tty; else TTY_EARLY=""; fi
+
 say()  { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 warn() { printf '\033[33m    %s\033[0m\n' "$1"; }
 die()  { printf '\n\033[31mABBRUCH: %s\033[0m\n' "$1" >&2; exit 1; }
 
 # --------------------------------------------------------------- 1. Python
 say "1/6  Python und Abhaengigkeiten"
-PY="$(command -v python3 || true)"
-[ -n "$PY" ] || die "python3 fehlt. Behebe das mit: xcode-select --install"
+
+# `python3` allein reicht auf einem Mac nicht: die Apple Command Line Tools
+# liefern 3.9, und ein aktives venv eines anderen Projekts kapert den Namen
+# zusaetzlich. Deshalb wird nach dem NEUESTEN brauchbaren Interpreter gesucht,
+# an allen Stellen, an denen macOS ihn ueblicherweise ablegt.
+. "$REPO/deploy/_find_python.sh"
+
+[ -n "${VIRTUAL_ENV:-}" ] && warn "Aktives venv erkannt ($VIRTUAL_ENV) -- wird ignoriert."
+
+PY="$(find_python)"
+
+if [ -z "$PY" ]; then
+    SYS="$(command -v python3 2>/dev/null || true)"
+    [ -n "$SYS" ] && SYSVER="$("$SYS" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null)" || SYSVER="keins"
+    warn "Kein Python 3.10+ gefunden (gefunden: $SYSVER)."
+    if command -v brew >/dev/null 2>&1 && [ -n "$TTY_EARLY" ]; then
+        printf '    Mit Homebrew installieren? [J/n] '
+        read -r _ans < "$TTY_EARLY"
+        case "$_ans" in
+            n|N) die "Dann von Hand: brew install python@3.12" ;;
+            *) say "Installiere python@3.12 via Homebrew (dauert ein paar Minuten)"
+               brew install python@3.12 || die "Homebrew-Installation fehlgeschlagen."
+               PY="$(find_python)"
+               [ -n "$PY" ] || die "Auch nach der Installation kein Python 3.10+ gefunden." ;;
+        esac
+    elif command -v brew >/dev/null 2>&1; then
+        die "Behebe das mit:  brew install python@3.12   und starte das Skript neu."
+    else
+        die "Behebe das so:  $(python_install_hint)
+       Danach dieses Skript erneut starten."
+    fi
+fi
+
 PYVER="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-case "$PYVER" in
-    3.1[0-9]|3.[2-9][0-9]) ;;
-    *) die "Python $PYVER gefunden, benoetigt wird 3.10 oder neuer." ;;
-esac
+# Ein venv, das mit einer anderen Version gebaut wurde, wird verworfen --
+# sonst installiert pip in einen Interpreter, den wir gar nicht gewaehlt haben.
+if [ -x "$VENV/bin/python" ]; then
+    HAVE="$("$VENV/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")"
+    [ "$HAVE" = "$PYVER" ] || { warn "venv war Python $HAVE, neu anlegen mit $PYVER."; rm -rf "$VENV"; }
+fi
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet -e ".[all]"
-printf '    Python %s, micronalgo installiert.\n' "$PYVER"
+printf '    Python %s (%s), micronalgo installiert.\n' "$PYVER" "$PY"
 
 # --------------------------------------------------------------- 2. Zugang
 say "2/6  Alpaca-Paper-Zugang"
@@ -43,10 +80,7 @@ read_env() { grep -E "^$1=" .env 2>/dev/null | head -1 | cut -d= -f2- ; }
 KEY="$(read_env ALPACA_API_KEY_ID)"
 SEC="$(read_env ALPACA_API_SECRET_KEY)"
 
-# Eingaben kommen von /dev/tty, nicht von stdin. Sonst funktioniert die
-# Abfrage nicht, wenn das Skript selbst ueber eine Pipe kommt
-# (`curl ... | sh`) -- dann ist stdin naemlich das Skript.
-if [ -r /dev/tty ]; then TTY=/dev/tty; else TTY=""; fi
+TTY="$TTY_EARLY"
 ask() { printf '%s' "$1"; [ -n "$TTY" ] && read -r REPLY_VALUE < "$TTY" || read -r REPLY_VALUE; }
 
 if [ -z "$KEY" ] || [ -z "$SEC" ]; then

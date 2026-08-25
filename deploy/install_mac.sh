@@ -17,19 +17,22 @@ PLIST_DST="$HOME/Library/LaunchAgents/com.micronalgo.paper.plist"
 echo "==> micronalgo Installation in $REPO"
 
 # ---------------------------------------------------------------- Python
-PY="$(command -v python3 || true)"
+. "$REPO/deploy/_find_python.sh"
+[ -n "${VIRTUAL_ENV:-}" ] && echo "==> aktives venv erkannt, wird ignoriert: $VIRTUAL_ENV"
+PY="$(find_python)"
 if [ -z "$PY" ]; then
-    echo "FEHLER: python3 nicht gefunden."
-    echo "  Entweder: xcode-select --install   (Apple Command Line Tools)"
-    echo "  oder:     brew install python@3.12  (Homebrew)"
+    echo "FEHLER: kein Python 3.10 oder neuer gefunden."
+    echo "  Behebe das so: $(python_install_hint)"
     exit 1
 fi
 PYVER="$("$PY" -c 'import sys; print("%d.%d" % sys.version_info[:2])')"
-case "$PYVER" in
-    3.1[0-9]|3.[2-9][0-9]) ;;
-    *) echo "FEHLER: Python $PYVER gefunden, benoetigt wird >= 3.10."; exit 1 ;;
-esac
 echo "==> Python $PYVER: $PY"
+
+# Ein venv einer anderen Version verwerfen, sonst installiert pip woanders hin.
+if [ -x "$VENV/bin/python" ]; then
+    HAVE="$("$VENV/bin/python" -c 'import sys; print("%d.%d" % sys.version_info[:2])' 2>/dev/null || echo "?")"
+    [ "$HAVE" = "$PYVER" ] || { echo "==> venv war Python $HAVE, wird neu angelegt."; rm -rf "$VENV"; }
+fi
 
 # ---------------------------------------------------------------- venv
 if [ ! -x "$VENV/bin/python" ]; then

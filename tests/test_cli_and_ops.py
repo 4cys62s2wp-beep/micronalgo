@@ -401,3 +401,55 @@ def test_start_script_is_safe_by_construction():
 
     # The script must never hardcode a live-money endpoint.
     assert "api.alpaca.markets" not in text.replace("paper-api.alpaca.markets", "")
+
+
+def test_interpreter_search_ignores_a_hijacking_old_venv(tmp_path):
+    """macOS ships Python 3.9 as `python3`, and an active venv from another
+    project hijacks the name on top of that -- VS Code activates them
+    automatically. The search must find a newer interpreter regardless."""
+    import os
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+
+    fake_bin = tmp_path / "fakevenv" / "bin"
+    fake_bin.mkdir(parents=True)
+    python3 = fake_bin / "python3"
+    python3.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "-c" ]; then\n'
+        '  case "$2" in\n'
+        "    *version_info\\[0\\]\\ \\*\\ 100*) echo 309; exit 0;;\n"
+        "    *%d.%d*) echo 3.9; exit 0;;\n"
+        "  esac\n"
+        "fi\n"
+        "exit 1\n"
+    )
+    python3.chmod(0o755)
+
+    env = dict(os.environ)
+    env["VIRTUAL_ENV"] = str(tmp_path / "fakevenv")
+    env["PATH"] = f"{fake_bin}:{env['PATH']}"
+
+    probe = (
+        f'. "{root}/deploy/_find_python.sh"\n'
+        'found="$(find_python)"\n'
+        '[ -n "$found" ] || { echo NONE; exit 0; }\n'
+        '"$found" -c \'import sys; print(sys.version_info[0] * 100 + sys.version_info[1])\'\n'
+    )
+    out = subprocess.run(["sh", "-c", probe], capture_output=True, text=True, env=env)
+    assert out.returncode == 0, out.stderr
+    assert out.stdout.strip() != "NONE", "search found nothing despite a usable interpreter"
+    assert int(out.stdout.strip()) >= 310, f"search picked the 3.9 hijacker: {out.stdout}"
+
+
+def test_both_mac_scripts_use_the_shared_search():
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    for name in ("start_mac.sh", "install_mac.sh"):
+        text = (root / "deploy" / name).read_text()
+        assert "_find_python.sh" in text, f"{name} does not use the shared search"
+        # The naive check is exactly the bug that blocked a real Mac.
+        assert 'PY="$(command -v python3 || true)"' not in text

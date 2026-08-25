@@ -93,6 +93,54 @@ def max_drawdown(equity: pd.Series | np.ndarray) -> tuple[float, int]:
     return mdd, int(longest)
 
 
+def position_sizing_table(
+    returns: pd.Series,
+    fractions: tuple[float, ...] = (1.0, 0.75, 0.5, 0.35, 0.25, 0.15),
+    *,
+    periods_per_year: int = TRADING_DAYS,
+) -> pd.DataFrame:
+    """What each deployment fraction does to return AND to drawdown.
+
+    The honest way to respond to a drawdown you cannot stomach is to trade
+    smaller, not to change the threshold. Deploying a fraction ``f`` of capital
+    scales every per-session return by ``f``, so the whole equity path is
+    re-derived exactly rather than approximated -- drawdown does not scale
+    linearly with ``f`` and a rule of thumb would understate it.
+
+    Reported per fraction: CAGR, max drawdown, Calmar, and the worst single
+    session. Calmar is the column that matters when choosing: it barely moves
+    across sizes, which is the point -- sizing down buys survivability at a
+    proportional cost in return, and does not improve the trade's quality.
+
+    This does not model leverage above 1.0. Above that, borrowing costs and the
+    ruin risk of a single overnight gap dominate, and neither is captured by
+    scaling a return series.
+    """
+    r = returns.dropna().astype("float64")
+    rows = []
+    for f in fractions:
+        if f <= 0:
+            continue
+        scaled = r * f
+        equity = (1.0 + scaled).cumprod()
+        n = len(scaled)
+        years = n / periods_per_year
+        total = float(equity.iloc[-1] - 1.0) if n else 0.0
+        cagr = (1.0 + total) ** (1.0 / years) - 1.0 if years > 0 and (1.0 + total) > 0 else float("nan")
+        mdd, under = max_drawdown(equity)
+        rows.append(
+            {
+                "fraction": f,
+                "cagr": cagr,
+                "max_drawdown": mdd,
+                "calmar": (cagr / abs(mdd)) if mdd < 0 and np.isfinite(cagr) else float("nan"),
+                "worst_session": float(scaled.min()) if n else float("nan"),
+                "sessions_under_water": under,
+            }
+        )
+    return pd.DataFrame(rows).set_index("fraction")
+
+
 def drawdown_episodes(equity: pd.Series, top: int = 5) -> pd.DataFrame:
     """The largest drawdowns, each with when it started, bottomed and recovered.
 

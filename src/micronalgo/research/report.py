@@ -123,6 +123,17 @@ def render_console(r: StudyResult, *, width: int = 100) -> str:
     out.append("   lasted -- once in a crisis and recovered, or every few years.")
 
     out.append("")
+    out.append(" POSITION SIZE  (the honest answer to a drawdown you cannot stomach)")
+    out.append(thin)
+    if not r.sizing.empty:
+        out.append(_indent(r.sizing.to_string(float_format=lambda x: f"{x:,.4f}"), 3))
+    out.append("")
+    out.append("   Trading smaller is the response to an unbearable drawdown -- not moving the")
+    out.append("   threshold. Note that Calmar barely changes down the column: sizing down buys")
+    out.append("   survivability at a proportional cost in return. It does not make the trade")
+    out.append("   better, it makes it holdable, and holdable is what a backtest silently assumes.")
+
+    out.append("")
     out.append(" WORST OVERNIGHT GAPS  (held in full, no stop is possible)")
     out.append(thin)
     out.append(_indent(r.worst_gaps.to_string(float_format=lambda x: f"{x:,.4f}"), 3))
@@ -412,6 +423,14 @@ cannot separate the two explanations. The spread here is estimated from daily hi
 <h2>Is it a handful of sessions?</h2>
 {_table(r.drop_best)}
 {fig('distribution', 'Overnight return distribution. The log-scaled y-axis makes the tail honest.')}
+
+<h2>Position size</h2>
+<p class="sub">The honest response to a drawdown you cannot stomach.</p>
+{_table(r.sizing)}
+<div class="note">Trading smaller is the answer &mdash; not moving the threshold. Calmar barely
+changes down the column, and that is the point: sizing down buys survivability at a proportional
+cost in return. It does not make the trade better, it makes it holdable, and holdable is exactly
+what every backtest silently assumes you are.</div>
 
 <h2>Drawdown episodes</h2>
 <p class="sub">When each one started, how deep it went, and how long it took to recover.</p>

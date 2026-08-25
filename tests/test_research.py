@@ -337,3 +337,50 @@ def test_study_reports_drawdown_episodes():
     assert set(["start", "trough", "depth", "ongoing"]).issubset(r.drawdowns.columns)
     if not r.drawdowns.empty:
         assert (r.drawdowns["depth"] <= 0).all()
+
+
+def test_position_sizing_scales_return_and_drawdown_together():
+    """Sizing down must be shown as a real trade-off, not a free lunch: both the
+    return and the drawdown shrink, and Calmar stays roughly flat."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(3)
+    r = pd.Series(0.0017 + 0.0186 * rng.standard_t(4, 4000) / np.sqrt(2))
+    t = M.position_sizing_table(r)
+
+    assert list(t.index) == sorted(t.index, reverse=True)
+    assert t["cagr"].is_monotonic_decreasing
+    # Less capital deployed -> shallower drawdown (max_drawdown is negative).
+    assert t["max_drawdown"].is_monotonic_increasing
+    assert t["worst_session"].is_monotonic_increasing
+    # Calmar barely moves: sizing buys survivability, not quality.
+    assert t["calmar"].max() - t["calmar"].min() < 0.25
+
+
+def test_position_sizing_drawdown_is_exact_not_linear():
+    """Drawdown falls MORE SLOWLY than the fraction, so halving the size does not
+    halve the pain: the equity path is re-derived rather than scaled, because a
+    linear rule of thumb would flatter the smaller size."""
+    import numpy as np
+    import pandas as pd
+
+    rng = np.random.default_rng(9)
+    r = pd.Series(0.001 + 0.02 * rng.standard_normal(3000))
+    t = M.position_sizing_table(r, fractions=(1.0, 0.5))
+    full, half = t.loc[1.0, "max_drawdown"], t.loc[0.5, "max_drawdown"]
+
+    assert half > full, "half the size must still be the shallower drawdown"
+    # Deeper than naive halving predicts (both are negative, so "deeper" is "<").
+    assert half < full * 0.5, (
+        f"half-size drawdown {half:.4f} is not deeper than naive scaling {full * 0.5:.4f}; "
+        "a linear approximation would have been safe to use, and it is not"
+    )
+    assert half > full * 0.5 * 1.5, "but not absurdly deeper"
+
+
+def test_study_includes_the_sizing_table():
+    bars = random_walk(1200, seed=6, start="2016-01-04")
+    r = run_study(bars, bootstrap_resamples=60)
+    assert not r.sizing.empty
+    assert 1.0 in r.sizing.index

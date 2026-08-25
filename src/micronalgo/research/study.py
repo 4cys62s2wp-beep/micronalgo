@@ -119,6 +119,7 @@ class StudyResult:
     monte_carlo: pd.DataFrame
     worst_gaps: pd.DataFrame
     drawdowns: pd.DataFrame
+    sizing: pd.DataFrame
     bounce: dict[str, float]
     spread_by_era: pd.DataFrame
     reality: RealityCheck
@@ -226,6 +227,7 @@ def run_study(
 
     say("spread and bid-ask-bounce diagnostics")
     drawdowns = M.drawdown_episodes(results[primary_scenario].equity, top=5)
+    sizing = M.position_sizing_table(results[primary_scenario].returns)
     bounce = R.bid_ask_bounce_check(bars, r_on)
     spreads = R.spread_by_era(bars)
 
@@ -264,6 +266,7 @@ def run_study(
         monte_carlo=mc,
         worst_gaps=worst,
         drawdowns=drawdowns,
+        sizing=sizing,
         bounce=bounce,
         spread_by_era=spreads,
         reality=reality,

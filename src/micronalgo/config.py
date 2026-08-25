@@ -18,6 +18,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -46,8 +47,21 @@ class Settings(BaseSettings):
     alpaca_data_feed: Literal["iex", "sip"] = "iex"
 
     live_trading_ack: str = ""
-    """Must equal ``I UNDERSTAND THIS IS REAL MONEY`` before a non-paper base URL
-    is accepted. A typo in a URL must never be sufficient to trade real money."""
+    """Must equal ``I UNDERSTAND THIS IS REAL MONEY`` before a live base URL is
+    accepted. A typo in a URL must never be sufficient to trade real money."""
+
+    alpaca_paper: bool | None = None
+    """Explicitly declare whether ``alpaca_base_url`` is a paper endpoint.
+
+    ``None`` infers it from the hostname. The inference exists for convenience,
+    not as a security boundary -- Alpaca operates more than one region (the EU
+    entity among them) and hostnames differ, so a user whose paper endpoint is
+    not recognised sets this to ``True`` and is done.
+
+    This is deliberately separate from :attr:`live_trading_ack`: an
+    unrecognised *paper* host must never be resolved by telling someone to
+    acknowledge real-money trading. That would train exactly the wrong reflex.
+    """
 
     # ---------------------------------------------------------------- sizing
     initial_capital: float = 100_000.0
@@ -146,18 +160,47 @@ class Settings(BaseSettings):
             raise ValueError("leverage must be in (0, 4]")
         return v
 
+    @staticmethod
+    def _host_looks_like_paper(url: str) -> bool:
+        """Is ``paper`` a label of this hostname?
+
+        Matches ``paper-api.alpaca.markets``, ``paper.alpaca.markets`` and
+        regional variants such as ``paper-api.eu.alpaca.markets``. Matching on
+        labels rather than a bare substring keeps a host like
+        ``notpaperapi.example.com`` from passing.
+        """
+        host = urlparse(url if "//" in url else f"https://{url}").hostname or ""
+        return any(
+            label == "paper" or label.startswith("paper-")
+            for label in host.lower().split(".")
+        )
+
     @model_validator(mode="after")
     def _guard_real_money(self) -> Settings:
-        url = self.alpaca_base_url.lower()
-        is_paper = "paper-api" in url
-        if self.broker == "alpaca" and not is_paper:
-            if self.live_trading_ack != "I UNDERSTAND THIS IS REAL MONEY":
-                raise ValueError(
-                    f"alpaca_base_url {self.alpaca_base_url!r} is not the paper endpoint. "
-                    "Refusing to start. To trade real money you must set "
-                    "MICRONALGO_LIVE_TRADING_ACK='I UNDERSTAND THIS IS REAL MONEY' "
-                    "and you should not do that until docs/GO_LIVE_CHECKLIST.md is fully satisfied."
-                )
+        if self.broker != "alpaca":
+            return self._guard_windows()
+
+        is_paper = (
+            self.alpaca_paper
+            if self.alpaca_paper is not None
+            else self._host_looks_like_paper(self.alpaca_base_url)
+        )
+        if not is_paper and self.live_trading_ack != "I UNDERSTAND THIS IS REAL MONEY":
+            raise ValueError(
+                f"alpaca_base_url {self.alpaca_base_url!r} is not recognised as a paper "
+                "endpoint, so this refuses to start. Two very different situations:\n"
+                "  (a) It IS a paper endpoint that this check does not know -- Alpaca runs "
+                "several regions and the hostnames differ. Then set "
+                "MICRONALGO_ALPACA_PAPER=true and carry on. Nothing else changes.\n"
+                "  (b) It is a LIVE endpoint and you mean to trade real money. Then set "
+                "MICRONALGO_LIVE_TRADING_ACK='I UNDERSTAND THIS IS REAL MONEY' -- and do "
+                "not, until docs/GO_LIVE_CHECKLIST.md is fully satisfied.\n"
+                "If you are unsure which one you have, it is (a): check the Alpaca dashboard, "
+                "where paper and live accounts are separate and switched explicitly."
+            )
+        return self._guard_windows()
+
+    def _guard_windows(self) -> Settings:
         if self.entry_cutoff_offset_min >= self.entry_submit_offset_min:
             raise ValueError("entry_cutoff_offset_min must be smaller than entry_submit_offset_min")
         if self.exit_cutoff_offset_min >= self.exit_submit_offset_min:
@@ -167,7 +210,11 @@ class Settings(BaseSettings):
     # ---------------------------------------------------------------- helpers
     @property
     def is_paper(self) -> bool:
-        return self.broker == "sim" or "paper-api" in self.alpaca_base_url.lower()
+        if self.broker == "sim":
+            return True
+        if self.alpaca_paper is not None:
+            return self.alpaca_paper
+        return self._host_looks_like_paper(self.alpaca_base_url)
 
     def entry_window(self, session_close: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
         """(submit_at, hard_cutoff) for the closing-auction order."""

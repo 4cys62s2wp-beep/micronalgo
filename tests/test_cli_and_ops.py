@@ -166,7 +166,7 @@ def test_help_lists_every_command(capsys):
 
 # ------------------------------------------------------------------ settings
 def test_real_money_requires_an_explicit_acknowledgement():
-    with pytest.raises(ValueError, match="not the paper endpoint"):
+    with pytest.raises(ValueError, match="not recognised as a paper"):
         Settings(broker="alpaca", alpaca_base_url="https://api.alpaca.markets")
     ok = Settings(broker="alpaca", alpaca_base_url="https://api.alpaca.markets",
                   live_trading_ack="I UNDERSTAND THIS IS REAL MONEY")
@@ -453,3 +453,48 @@ def test_both_mac_scripts_use_the_shared_search():
         assert "_find_python.sh" in text, f"{name} does not use the shared search"
         # The naive check is exactly the bug that blocked a real Mac.
         assert 'PY="$(command -v python3 || true)"' not in text
+
+
+@pytest.mark.parametrize("url", [
+    "https://paper-api.alpaca.markets",
+    "https://paper.alpaca.markets",
+    "https://paper-api.eu.alpaca.markets",
+])
+def test_paper_hosts_are_recognised_across_regions(url):
+    """Alpaca runs more than one region and the paper hostnames differ. A
+    substring check on 'paper-api' rejected perfectly good paper endpoints."""
+    s = Settings(broker="alpaca", alpaca_base_url=url)
+    assert s.is_paper
+
+
+@pytest.mark.parametrize("url", [
+    "https://api.alpaca.markets",
+    "https://notpaperapi.example.com",   # must not pass on a bare substring
+])
+def test_non_paper_hosts_still_require_the_acknowledgement(url):
+    with pytest.raises(ValueError):
+        Settings(broker="alpaca", alpaca_base_url=url)
+    ok = Settings(broker="alpaca", alpaca_base_url=url,
+                  live_trading_ack="I UNDERSTAND THIS IS REAL MONEY")
+    assert not ok.is_paper
+
+
+def test_an_unrecognised_paper_endpoint_is_solved_without_the_live_flag():
+    """The dangerous failure this guards: telling someone whose PAPER endpoint
+    is unrecognised to set the real-money acknowledgement. That trains exactly
+    the wrong reflex, so the paper override must exist and be offered first."""
+    url = "https://api.eu.alpaca.markets"
+    with pytest.raises(ValueError) as exc:
+        Settings(broker="alpaca", alpaca_base_url=url)
+    message = str(exc.value)
+    assert message.index("ALPACA_PAPER") < message.index("LIVE_TRADING_ACK")
+    assert "it is (a)" in message
+
+    s = Settings(broker="alpaca", alpaca_base_url=url, alpaca_paper=True)
+    assert s.is_paper and not s.live_trading_ack
+
+
+def test_explicit_paper_false_still_demands_the_acknowledgement():
+    with pytest.raises(ValueError):
+        Settings(broker="alpaca", alpaca_base_url="https://paper-api.alpaca.markets",
+                 alpaca_paper=False)

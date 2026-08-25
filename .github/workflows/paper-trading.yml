@@ -113,16 +113,26 @@ jobs:
         # verschluckt wurde, meldete der Lauf trotzdem Erfolg und startete
         # jedes Mal mit leerem Zustand. Deshalb wird unten gezaehlt statt
         # behauptet.
+        #
+        # Der Rueckschreib-Schritt macht einen force-push. Waere das Holen
+        # stillschweigend fehlgeschlagen -- ein Netzhaenger genuegt --, wuerde
+        # er den gespeicherten Zustand mit einem leeren ueberschreiben. Deshalb
+        # wird hier zuerst gefragt, OB es den Branch ueberhaupt gibt, und nur im
+        # Erfolgsfall STATE_OK gesetzt. Bricht das Holen ab, bleibt STATE_OK
+        # leer, und der force-push unterbleibt.
         run: |
           set -eu
           mkdir -p runtime/state runtime/logs runtime/cache
-          if git fetch -q origin bot-state 2>/dev/null; then
+          if git ls-remote --exit-code --heads origin bot-state >/dev/null 2>&1; then
+            git fetch -q origin bot-state
             git checkout FETCH_HEAD -- runtime/state runtime/logs 2>/dev/null || true
             git reset -q
             n=$(find runtime/state -type f 2>/dev/null | wc -l | tr -d ' ')
             echo "Zustand aus bot-state: $n Datei(en)."
+            echo "STATE_OK=vorhanden" >> "$GITHUB_ENV"
           else
             echo "Kein bot-state-Branch, erster Lauf."
+            echo "STATE_OK=erstlauf" >> "$GITHUB_ENV"
           fi
 
       - name: Python einrichten
@@ -147,6 +157,12 @@ jobs:
         if: always()
         run: |
           set -eu
+          if [ -z "${STATE_OK:-}" ]; then
+            echo "::warning::Der Zustand konnte nicht geholt werden. Es wird" \
+                 "NICHTS zurueckgeschrieben -- ein force-push wuerde den" \
+                 "gespeicherten Zustand jetzt mit einem leeren ueberschreiben."
+            exit 0
+          fi
           git config user.name  "micronalgo-bot"
           git config user.email "noreply@anthropic.com"
           git checkout -B bot-state

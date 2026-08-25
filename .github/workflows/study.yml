@@ -80,6 +80,20 @@ jobs:
         run: |
           set -u
           mkdir -p runtime/cache runtime/logs berichte
+          # Datumsangaben pruefen, bevor sie in die Kommandozeile wandern. Ein
+          # Tippfehler soll hier scheitern, mit einem Satz, der ihn benennt --
+          # nicht spaeter in einer argparse-Meldung, und schon gar nicht als
+          # zusaetzliches Argument.
+          pruefe_datum() {   # $1 = Feldname fuer die Meldung, $2 = Wert
+            case "$2" in
+              "") ;;
+              [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+              *) echo "::error::$1 muss JJJJ-MM-TT sein oder leer, war: $2"
+                 exit 1 ;;
+            esac
+          }
+          pruefe_datum Beginn "$START"
+          pruefe_datum Ende   "$END"
           args=""
           [ -n "$START" ] && args="$args --start $START"
           [ -n "$END" ]   && args="$args --end $END"

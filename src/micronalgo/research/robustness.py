@@ -240,6 +240,13 @@ def roll_spread(close: pd.Series) -> dict[str, float]:
 
 _CS_K = 3.0 - 2.0 * np.sqrt(2.0)
 
+NOISE_NEGATIVE_SHARE = 0.35
+"""Above this share of negative per-day Corwin-Schultz estimates the series
+carries no resolvable spread signal: the per-day values are symmetric noise and
+their floored mean is bias, not measurement. Pure noise sits near 0.42; the
+share drops below 0.35 only once the true spread approaches the daily
+volatility."""
+
 
 def corwin_schultz_spread(bars: pd.DataFrame) -> dict[str, float]:
     """Corwin & Schultz (2012) high-low proportional effective spread.
@@ -258,6 +265,19 @@ def corwin_schultz_spread(bars: pd.DataFrame) -> dict[str, float]:
     Negative daily estimates are set to zero before averaging, which is the
     authors' own recommendation -- they arise from the estimator's noise, not
     from negative spreads.
+
+    The estimator has a noise floor, and it scales with VOLATILITY, not spread.
+    On a series whose spread is exactly zero and whose volatility is MU-like
+    (2.5 %/session) this returns ~74 bps; at 0.5 % volatility it returns ~15 bps.
+    The floor comes from the zero-flooring above: about 42 % of the per-day
+    estimates are negative in that regime, so what gets averaged is the positive
+    half of symmetric noise. Averaging without flooring does not rescue it --
+    that just moves the bias to about -80 bps.
+
+    So ``reliable`` is returned alongside the number, False exactly when
+    ``negative_share`` says the per-day estimates are symmetric noise. An
+    unreliable estimate must never become a verdict: a check that cannot measure
+    has to say so rather than invent a failure.
     """
     need = {"high", "low"}
     if not need.issubset(bars.columns) or len(bars) < 30:
@@ -279,13 +299,15 @@ def corwin_schultz_spread(bars: pd.DataFrame) -> dict[str, float]:
 
     finite = np.isfinite(spread)
     if not finite.any():
-        return {"spread": float("nan"), "n": 0.0, "negative_share": float("nan")}
+        return {"spread": float("nan"), "n": 0.0, "negative_share": float("nan"),
+                "reliable": False}
     vals = spread[finite]
     negative_share = float(np.mean(vals < 0))
     return {
         "spread": float(np.mean(np.maximum(vals, 0.0))),
         "n": float(vals.size),
         "negative_share": negative_share,
+        "reliable": bool(negative_share <= NOISE_NEGATIVE_SHARE),
     }
 
 
@@ -303,23 +325,35 @@ def bid_ask_bounce_check(bars: pd.DataFrame, r_on: pd.Series) -> dict[str, float
     compared against.
 
     Honest limitation, stated because it matters: daily OHLC carries no quotes,
-    so this cannot *prove* either explanation. What it can do is say whether the
-    artefact is large enough to account for the measured edge. Ruling it out
-    properly needs quote or minute-bar data. The era decomposition is the other
-    half of the answer: the artefact scales with the tick size, so an edge that
-    survives after decimalisation is much harder to explain away.
+    so this cannot *prove* either explanation. Worse, on a volatile stock the
+    only available estimator cannot even measure -- see
+    :func:`corwin_schultz_spread`, whose noise floor at MU-like volatility is
+    around 74 bps, far above any real modern spread. ``determinable`` reports
+    that, and when it is False the question is OPEN rather than answered, which
+    is a different thing from the strategy failing.
+
+    Settling it needs quote or minute-bar data. The era decomposition is the
+    other half of the answer: the artefact scales with the tick size, so an edge
+    that stays roughly constant across the 1/8, 1/16 and decimal eras is hard to
+    explain as a spread artefact -- the artefact would have shrunk by two orders
+    of magnitude along the way.
     """
     cs = corwin_schultz_spread(bars)
     roll = roll_spread(bars["close"])
     mean_on = float(r_on.dropna().mean())
     spread = cs["spread"]
     ratio = mean_on / spread if (np.isfinite(spread) and spread > 0) else float("nan")
+    determinable = bool(cs["reliable"])
     return {
         "mean_overnight": mean_on,
         "corwin_schultz_spread": spread,
         "roll_spread": roll["effective_spread"],
         "edge_over_spread": ratio,
-        "within_spread": bool(np.isfinite(ratio) and ratio <= 1.0),
+        # Only meaningful when the estimate is reliable. On a volatile stock the
+        # estimator's noise floor exceeds any realistic modern spread, so this
+        # ratio would otherwise "prove" a failure that is pure volatility.
+        "within_spread": bool(determinable and np.isfinite(ratio) and ratio <= 1.0),
+        "determinable": determinable,
         "cs_negative_share": cs["negative_share"],
     }
 

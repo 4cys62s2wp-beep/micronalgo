@@ -247,3 +247,57 @@ def test_empty_metrics_respect_exposure_fraction():
 
     m = M.compute(pd.Series([], dtype="float64"), exposure_fraction=0.25)
     assert m.exposure_fraction == 0.25
+
+
+def _flat_vol_series(n, spread, sigma, seed=3):
+    """Random walk with a known spread and controllable volatility."""
+    import numpy as np
+    import pandas as pd
+
+    from micronalgo.data.schema import coerce
+
+    rng = np.random.default_rng(seed)
+    v = np.cumprod(1 + rng.normal(0, sigma, n)) * 100.0
+    rng_hl = np.abs(rng.normal(0, sigma, n))
+    df = pd.DataFrame(
+        {"open": v, "close": v,
+         "high": v * (1 + rng_hl) * (1 + spread / 2),
+         "low": v * (1 - rng_hl) * (1 - spread / 2)},
+        index=pd.bdate_range("2000-01-03", periods=n),
+    )
+    df.index.name = "date"
+    return coerce(df)
+
+
+def test_spread_estimator_admits_when_it_cannot_measure():
+    """Corwin-Schultz has a noise floor that scales with VOLATILITY, not spread.
+    On a zero-spread series at MU-like volatility it reports ~74 bps. It must
+    flag that as unreliable rather than hand back a number that looks like a
+    measurement."""
+    cs = R.corwin_schultz_spread(_flat_vol_series(6000, 0.0, 0.025))
+    assert cs["spread"] > 0.004, "the noise floor is real; this test assumes it exists"
+    assert not cs["reliable"], "a pure-noise estimate must not be presented as usable"
+    assert cs["negative_share"] > R.NOISE_NEGATIVE_SHARE
+
+
+def test_spread_estimator_is_trusted_when_the_spread_is_resolvable():
+    cs = R.corwin_schultz_spread(_flat_vol_series(6000, 0.05, 0.025))
+    assert cs["reliable"]
+    assert cs["negative_share"] <= R.NOISE_NEGATIVE_SHARE
+
+
+def test_unmeasurable_spread_does_not_manufacture_a_failure():
+    """The bug this closes: a volatile stock got a FAIL verdict built entirely
+    out of estimator noise, which discredits every other line in the report."""
+    bars = _flat_vol_series(6000, 0.0, 0.025)
+    r_on = decompose(bars).frame["r_on"]
+    chk = R.bid_ask_bounce_check(bars, r_on)
+    assert not chk["determinable"]
+    assert not chk["within_spread"], "noise must not be reported as 'edge inside the spread'"
+
+    result = run_study(bars, bootstrap_resamples=80)
+    line = next(c for c in result.reality.criteria if c.name == "edge vs. effective spread")
+    assert line.verdict is Verdict.WARN
+    assert "not measurable" in line.value
+    # It must stay a live concern, not become an all-clear.
+    assert "concern is real" in line.explanation

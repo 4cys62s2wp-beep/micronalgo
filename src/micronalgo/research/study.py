@@ -337,7 +337,32 @@ def _reality_check(
     if bounce:
         ratio = bounce.get("edge_over_spread", float("nan"))
         spread_bps = bounce.get("corwin_schultz_spread", float("nan")) * 1e4
-        if np.isfinite(ratio):
+        determinable = bool(bounce.get("determinable", False))
+        neg = bounce.get("cs_negative_share", float("nan"))
+
+        if not determinable:
+            # The estimator could not measure. That is NOT a failure of the
+            # strategy, and reporting it as one would be worse than not checking
+            # at all: it manufactures a verdict from noise and discredits every
+            # other line. But it is not an all-clear either -- the question is
+            # simply open, and the era table below is what carries the evidence.
+            rc.add(
+                "edge vs. effective spread",
+                Verdict.WARN,
+                "not measurable from daily bars",
+                "needs quote or minute data",
+                "The concern is real: if closing prints land on the bid and opening prints on the "
+                "ask, a full effective spread appears as overnight 'return' every session with no "
+                "economics behind it. But the only estimator available from daily bars "
+                "(Corwin-Schultz) has a noise floor that scales with volatility, and on this series "
+                f"{neg:.0%} of its per-day estimates are negative -- i.e. it is averaging symmetric "
+                f"noise, and the {spread_bps:.0f} bps it reports is that noise, not a spread. This "
+                "line therefore says 'unknown', which is the honest answer. What settles it: quote "
+                "or minute data, and the era table -- a spread artefact must shrink by two orders "
+                "of magnitude from the 1/8-tick era to decimalisation, so an edge that stays flat "
+                "across those eras is hard to explain that way.",
+            )
+        elif np.isfinite(ratio):
             rc.add(
                 "edge vs. effective spread",
                 Verdict.PASS if ratio > 2.0 else (Verdict.WARN if ratio > 1.0 else Verdict.FAIL),
@@ -345,10 +370,8 @@ def _reality_check(
                 "> 2x the spread",
                 "If closing prints land on the bid and opening prints on the ask, a full effective "
                 "spread appears as overnight 'return' every session with no economics behind it at "
-                "all. The spread is estimated from daily highs and lows (Corwin-Schultz), which on a "
-                "volatile stock tends to run high -- so this errs towards flagging. Daily bars cannot "
-                "settle the question; the era table is the other half of the answer, since the "
-                "artefact shrinks with the tick size.",
+                "all. The estimator reported a resolvable spread here, so the comparison means "
+                "something.",
             )
 
     # 5. Is the mean statistically distinguishable from zero?

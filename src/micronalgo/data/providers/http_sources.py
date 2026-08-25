@@ -40,11 +40,14 @@ import requests
 from ..schema import Adjustment, coerce
 from .base import Fetched, ProviderError
 
-DEFAULT_TIMEOUT = 30
+# (connect, read). A short connect timeout matters: when a provider is simply
+# unreachable, the whole fallback chain otherwise stalls for 30 silent seconds
+# per provider and the command looks hung.
+DEFAULT_TIMEOUT = (5, 30)
 USER_AGENT = "micronalgo/1.0 (+research)"
 
 
-def _get(url: str, *, params: dict | None = None, headers: dict | None = None, timeout: int = DEFAULT_TIMEOUT):
+def _get(url: str, *, params: dict | None = None, headers: dict | None = None, timeout=DEFAULT_TIMEOUT):
     h = {"User-Agent": USER_AGENT}
     h.update(headers or {})
     try:

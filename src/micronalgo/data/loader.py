@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -139,6 +140,7 @@ def load(
     offline: bool = False,
     max_cache_age_hours: float = 18.0,
     check_fresh: bool = False,
+    on_progress: Callable[[str], None] | None = None,
     **provider_kw,
 ) -> LoadedSeries:
     """Load a validated price series, preferring the first provider that works.
@@ -149,6 +151,7 @@ def load(
     cache_dir = Path(cache_dir)
     tried: list[str] = []
     errors: list[str] = []
+    say = on_progress or (lambda _msg: None)
 
     for name in providers:
         cached = read_cache(symbol, name, cache_dir)
@@ -157,6 +160,7 @@ def load(
             age = _age_hours(prov.fetched_at)
             fresh_enough = age is not None and age <= max_cache_age_hours
             if offline or (fresh_enough and not refresh):
+                say(f"{name}: using cached data ({len(frame):,} rows)")
                 sliced = _slice(frame, start, end)
                 report = validate(sliced, check_fresh=check_fresh)
                 prov.fallback_from = tried.copy()
@@ -176,12 +180,15 @@ def load(
             errors.append(f"{name}: not configured (missing API key?)")
             continue
 
+        say(f"{name}: downloading {symbol} ...")
         try:
             fetched = provider.fetch(symbol, start, end)
         except ProviderError as exc:
             tried.append(name)
             errors.append(f"{name}: {exc}")
+            say(f"{name}: unavailable, trying the next provider")
             continue
+        say(f"{name}: got {len(fetched.frame):,} rows")
 
         frame = fetched.frame
         report = validate(frame, check_fresh=check_fresh)

@@ -42,7 +42,22 @@ def _settings(args: argparse.Namespace, **overrides) -> Settings:
     return load_settings(**kw)
 
 
-def _load_bars(args: argparse.Namespace, settings: Settings, *, check_fresh: bool = False):
+def _progress(args: argparse.Namespace):
+    """Progress lines go to stderr, so `micronalgo study > file` stays clean."""
+    import time
+
+    if getattr(args, "quiet", False):
+        return lambda _msg: None
+    start = time.monotonic()
+
+    def say(message: str) -> None:
+        print(f"  [{time.monotonic() - start:5.1f}s] {message}", file=sys.stderr, flush=True)
+
+    return say
+
+
+def _load_bars(args: argparse.Namespace, settings: Settings, *, check_fresh: bool = False,
+               on_progress=None):
     from .data.loader import load
 
     providers = tuple(args.provider) if getattr(args, "provider", None) else settings.data_providers
@@ -55,6 +70,7 @@ def _load_bars(args: argparse.Namespace, settings: Settings, *, check_fresh: boo
         refresh=getattr(args, "refresh", False),
         offline=getattr(args, "offline", False),
         check_fresh=check_fresh,
+        on_progress=on_progress,
     )
 
 
@@ -157,7 +173,8 @@ def cmd_study(args: argparse.Namespace) -> int:
     from .research.study import run_study
 
     settings = _settings(args)
-    loaded = _load_bars(args, settings)
+    say = _progress(args)
+    loaded = _load_bars(args, settings, on_progress=say)
     print(loaded.provenance.render(), file=sys.stderr)
 
     result = run_study(
@@ -168,9 +185,10 @@ def cmd_study(args: argparse.Namespace) -> int:
         initial_capital=settings.initial_capital,
         n_variants_examined=args.variants,
         bootstrap_resamples=args.resamples,
+        on_progress=say,
     )
     print(render_console(result))
-    paths = write_report(result, args.out or settings.reports_dir)
+    paths = write_report(result, args.out or settings.reports_dir, on_progress=say)
     print("\nwrote:\n  " + "\n  ".join(str(p) for p in paths.values()))
     return {"PASS": 0, "WARN": 0, "FAIL": 2}[result.reality.verdict.value]
 
@@ -515,6 +533,7 @@ def build_parser() -> argparse.ArgumentParser:
     st.add_argument("--resamples", type=int, default=2000)
     st.add_argument("--variants", type=int, default=1,
                     help="how many configurations you examined in total; feeds the deflated Sharpe")
+    st.add_argument("--quiet", action="store_true", help="no progress lines on stderr")
 
     b = next(a for a in sub.choices.values() if a.get_default("func") is cmd_backtest)
     b.add_argument("--mode", default="overnight",

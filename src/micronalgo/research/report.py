@@ -446,7 +446,8 @@ remove, and every number here depends on the data and cost assumptions stated ab
     )
 
 
-def write_report(r: StudyResult, out_dir: Path | str, *, stem: str = "") -> dict[str, Path]:
+def write_report(r: StudyResult, out_dir: Path | str, *, stem: str = "",
+                 on_progress=None) -> dict[str, Path]:
     """Write ``<stem>.txt``, ``<stem>.html`` and ``<stem>.json``; returns the paths."""
     import json
 
@@ -456,12 +457,14 @@ def write_report(r: StudyResult, out_dir: Path | str, *, stem: str = "") -> dict
     out_dir.mkdir(parents=True, exist_ok=True)
     stem = stem or f"{r.symbol.lower()}_overnight_{dt.date.today().isoformat()}"
 
+    say = on_progress or (lambda _msg: None)
     paths = {
         "txt": out_dir / f"{stem}.txt",
         "html": out_dir / f"{stem}.html",
         "json": out_dir / f"{stem}.json",
     }
     paths["txt"].write_text(render_console(r), encoding="utf-8")
+    say("rendering charts")
     paths["html"].write_text(render_html(r), encoding="utf-8")
     paths["json"].write_text(json.dumps(to_dict(r), indent=2), encoding="utf-8")
     return paths

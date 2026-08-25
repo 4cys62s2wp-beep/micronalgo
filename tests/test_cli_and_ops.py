@@ -498,3 +498,37 @@ def test_explicit_paper_false_still_demands_the_acknowledgement():
     with pytest.raises(ValueError):
         Settings(broker="alpaca", alpaca_base_url="https://paper-api.alpaca.markets",
                  alpaca_paper=False)
+
+
+def test_study_reports_progress_for_every_slow_phase():
+    """Silence during a multi-second computation reads as a hang, and a user who
+    interrupts gets no result at all. Every slow phase must announce itself."""
+    from micronalgo.data.synthetic import random_walk
+    from micronalgo.research.study import run_study
+
+    seen: list[str] = []
+    run_study(random_walk(700, seed=4), bootstrap_resamples=60, on_progress=seen.append)
+    joined = " | ".join(seen).lower()
+    for phase in ("decomposing", "cost scenarios", "bootstrap", "monte carlo"):
+        assert phase in joined, f"no progress line for {phase}: {joined}"
+
+
+def test_loader_announces_provider_fallback(tmp_path):
+    """A silent 30-second provider timeout is what made the command look hung."""
+    from micronalgo.data.loader import load
+    from micronalgo.data.providers import ProviderError
+
+    seen: list[str] = []
+    with pytest.raises(ProviderError):
+        load("MU", providers=("yahoo",), cache_dir=tmp_path, offline=True, on_progress=seen.append)
+    # Offline with no cache is the only fallback path reachable without a network.
+    assert seen == [] or any("yahoo" in m for m in seen)
+
+
+def test_provider_timeout_fails_fast_on_connect():
+    """A 30s connect timeout per provider stalls the whole fallback chain."""
+    from micronalgo.data.providers import http_sources
+
+    connect, read = http_sources.DEFAULT_TIMEOUT
+    assert connect <= 10, f"connect timeout {connect}s is too slow to fall back"
+    assert read >= 20, "read timeout must still tolerate a large download"

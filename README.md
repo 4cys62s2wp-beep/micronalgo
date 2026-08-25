@@ -353,7 +353,7 @@ Backtest. Uebrig bleiben 0,003 % - reine Ganzstueck-Rundung.
 ## Tests
 
 ```bash
-pytest -q          # 219 Tests, kein Netzwerkzugriff
+pytest -q          # 222 Tests, kein Netzwerkzugriff
 ruff check src tests scripts
 ```
 

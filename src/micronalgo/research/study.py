@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import dataclasses
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -146,14 +147,22 @@ def run_study(
     n_variants_examined: int = 1,
     bootstrap_resamples: int = 2000,
     recent_years: int = 5,
+    on_progress: Callable[[str], None] | None = None,
 ) -> StudyResult:
-    """Compute everything the report needs."""
+    """Compute everything the report needs.
+
+    ``on_progress`` receives one short line per phase. Silence during a
+    multi-second computation reads as a hang, and a user who interrupts a run
+    gets no result at all -- so the phases announce themselves.
+    """
+    say = on_progress or (lambda _msg: None)
     if primary_scenario not in cost_scenarios:
         # Every downstream section (monte carlo, drawdown chart, reality check)
         # reads results[primary_scenario]; a custom scenario list that omits it
         # would KeyError three functions later with no hint why.
         cost_scenarios = (*cost_scenarios, primary_scenario)
 
+    say(f"decomposing {len(bars):,} sessions")
     dec = decompose(bars)
     frame = dec.frame
     r_on, r_id, r_cc = frame["r_on"], frame["r_id"], frame["r_cc"]
@@ -168,6 +177,7 @@ def run_study(
     # --- cost scenarios -----------------------------------------------------
     rows = []
     results: dict[str, BacktestResult] = {}
+    say(f"backtesting {len(cost_scenarios)} cost scenarios")
     for name in cost_scenarios:
         cfg = BacktestConfig(mode="overnight", cost=scenario(name), initial_capital=initial_capital)
         res = simulate(bars, cfg)
@@ -198,6 +208,7 @@ def run_study(
     metric_table = M.compare({"overnight": r_on, "intraday": r_id, "buy&hold": r_cc})
 
     # --- robustness ---------------------------------------------------------
+    say(f"stationary bootstrap, {bootstrap_resamples:,} resamples (the slow part)")
     bootstrap = R.stationary_bootstrap(r_on, statistic="mean", n_resamples=bootstrap_resamples)
     permutation = R.circular_permutation_test(r_on, r_id, n_resamples=2000)
     be = breakeven_cost(r_on)
@@ -205,12 +216,14 @@ def run_study(
     subs_regime = R.subperiods(r_on, by="regime")
     subs_decade = R.subperiods(r_on, by="decade")
     dow = R.day_of_week(r_on)
+    say("monte carlo, 800 resampled futures")
     mc = R.monte_carlo_paths(results[primary_scenario].returns, n_paths=800)
     rolling = R.rolling_stats(r_on, window=252)
 
     worst = frame.nsmallest(10, "r_on")[["r_on", "r_id", "r_cc"]].copy()
     worst.index = worst.index.date
 
+    say("spread and bid-ask-bounce diagnostics")
     bounce = R.bid_ask_bounce_check(bars, r_on)
     spreads = R.spread_by_era(bars)
 

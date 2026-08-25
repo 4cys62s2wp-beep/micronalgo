@@ -142,7 +142,23 @@ Sitzung sicher.
 
 Kompletter Ablauf inklusive Not-Aus vom Handy: `docs/CLOUD_SETUP.md`.
 
-## Auf dem Mac (komplette Software)
+## Auf dem Mac: ein Befehl, von null bis laufender Bot
+
+```bash
+git clone -b claude/micron-trading-algo-fy4q2o https://github.com/4cys62s2wp-beep/micronalgo.git ~/micronalgo 2>/dev/null; cd ~/micronalgo && git pull --ff-only -q; sh deploy/start_mac.sh
+```
+
+Das erledigt in einem Durchgang: Python pruefen, venv anlegen, alles
+installieren, die Alpaca-Paper-Schluessel abfragen und in `.env` schreiben
+(chmod 600), Preflight gegen Dein echtes Paper-Konto, die komplette Studie mit
+echten MU-Daten rechnen und den Bericht oeffnen, nachfragen ob scharf oder
+Trockenlauf -- und dann laeuft der Bot im Vordergrund.
+
+Idempotent: beliebig oft wiederholbar, Erledigtes wird uebersprungen. Und es
+wird **nichts gehandelt**, bevor der Preflight nicht beweist, dass Dein Konto
+Auktionsorders akzeptiert -- die Annahme, an der die ganze Strategie haengt.
+
+Fuer den Dauerbetrieb danach:
 
 ```bash
 sh deploy/install_mac.sh --launchd
@@ -337,7 +353,7 @@ Backtest. Uebrig bleiben 0,003 % - reine Ganzstueck-Rundung.
 ## Tests
 
 ```bash
-pytest -q          # 206 Tests, kein Netzwerkzugriff
+pytest -q          # 207 Tests, kein Netzwerkzugriff
 ruff check src tests scripts
 ```
 

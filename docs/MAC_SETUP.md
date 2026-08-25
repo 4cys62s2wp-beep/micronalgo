@@ -4,6 +4,18 @@ Komplette Einrichtung als dauerhaft laufende Software: Installation, Autostart
 per launchd, Echtzeit-Anbindung, Ueberwachung, und die eine Mac-Eigenheit, die
 man kennen muss (Schlafmodus).
 
+## 0. Der kurze Weg
+
+Ein Befehl, von null bis laufender Bot:
+
+```bash
+git clone -b claude/micron-trading-algo-fy4q2o https://github.com/4cys62s2wp-beep/micronalgo.git ~/micronalgo 2>/dev/null; cd ~/micronalgo && git pull --ff-only -q; sh deploy/start_mac.sh
+```
+
+Installiert, fragt die Schluessel ab, prueft alles gegen Dein Paper-Konto,
+rechnet die Studie, fragt ob scharf, startet. Wer die Schritte einzeln gehen
+will, liest weiter.
+
 ## 1. Installation
 
 ```bash

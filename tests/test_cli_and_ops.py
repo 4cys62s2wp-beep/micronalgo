@@ -367,3 +367,37 @@ def test_widened_window_absorbs_a_late_cron(monkeypatch):
         assert cutoff < session.close_dt()
         for delay in (0, 10, 20):
             assert submit <= submit + dt.timedelta(minutes=delay) <= cutoff
+
+
+def test_start_script_is_safe_by_construction():
+    """The one-command start path. Its safety properties are structural, so
+    they are asserted here rather than trusted to survive edits."""
+    import subprocess
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[1]
+    script = root / "deploy" / "start_mac.sh"
+    text = script.read_text()
+
+    assert subprocess.run(["sh", "-n", str(script)], capture_output=True).returncode == 0
+    assert text.startswith("#!/bin/sh")
+    assert "set -eu" in text
+
+    # Preflight must gate trading: it has to appear before `paper` runs, and a
+    # failure has to abort rather than warn.
+    assert text.index("preflight --probe-orders") < text.index("exec ")
+    assert "die \"Preflight nicht bestanden" in text
+
+    # Dry run is the default; going live requires an explicit answer.
+    assert 'MODE="--dry-run"' in text
+    assert text.index('MODE="--dry-run"') < text.index('MODE="--live"')
+
+    # Secrets: read from the terminal (works under `curl | sh`), echo disabled,
+    # written only to .env, which is gitignored and chmod 600.
+    assert "/dev/tty" in text
+    assert "stty -echo" in text
+    assert "chmod 600 .env" in text
+    assert ".env" in (root / ".gitignore").read_text()
+
+    # The script must never hardcode a live-money endpoint.
+    assert "api.alpaca.markets" not in text.replace("paper-api.alpaca.markets", "")

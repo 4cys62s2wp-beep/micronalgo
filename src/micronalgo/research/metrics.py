@@ -117,6 +117,11 @@ def position_sizing_table(
     scaling a return series.
     """
     r = returns.dropna().astype("float64")
+    columns = ["fraction", "cagr", "max_drawdown", "calmar", "worst_session",
+               "sessions_under_water"]
+    if r.empty:
+        # Six rows of NaN would look like an answer. There isn't one.
+        return pd.DataFrame(columns=columns).set_index("fraction")
     rows = []
     for f in fractions:
         if f <= 0:
@@ -126,7 +131,7 @@ def position_sizing_table(
         n = len(scaled)
         years = n / periods_per_year
         total = float(equity.iloc[-1] - 1.0) if n else 0.0
-        cagr = (1.0 + total) ** (1.0 / years) - 1.0 if years > 0 and (1.0 + total) > 0 else float("nan")
+        cagr = _cagr(total, years)
         mdd, under = max_drawdown(equity)
         rows.append(
             {
@@ -139,6 +144,21 @@ def position_sizing_table(
             }
         )
     return pd.DataFrame(rows).set_index("fraction")
+
+
+def _cagr(total_return: float, years: float) -> float:
+    """Compound annual growth, with a wiped account reported as -100 %.
+
+    ``(1 + total) ** (1 / years)`` is undefined at or below zero, and returning
+    NaN there prints as "n/a" -- which is the one place vagueness is unaffordable,
+    because it hides a total loss behind a formatting artefact.
+    """
+    if years <= 0:
+        return float("nan")
+    gross = 1.0 + total_return
+    if gross <= 0.0:
+        return -1.0
+    return float(gross ** (1.0 / years) - 1.0)
 
 
 def drawdown_episodes(equity: pd.Series, top: int = 5) -> pd.DataFrame:
@@ -313,7 +333,7 @@ def compute(
 
     years = n / periods_per_year
     total = float(np.prod(1.0 + r) - 1.0)
-    cagr = float((1.0 + total) ** (1.0 / years) - 1.0) if years > 0 and (1.0 + total) > 0 else float("nan")
+    cagr = _cagr(total, years)
 
     sd = float(np.std(r, ddof=1)) if n > 1 else 0.0
     ann_vol = sd * np.sqrt(periods_per_year)

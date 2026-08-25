@@ -93,6 +93,7 @@ class WalkForwardResult:
     oos_returns: pd.Series
     baseline_oos_returns: pd.Series
     candidate_names: list[str]
+    score: str = "geometric_mean"
     extra: dict = field(default_factory=dict)
 
     # ------------------------------------------------------------------ #
@@ -126,12 +127,26 @@ class WalkForwardResult:
         ]
         return pd.DataFrame(rows).set_index("fold")
 
+    def oos_drawdown(self) -> tuple[float, float]:
+        """Max drawdown of the stitched out-of-sample curve and of the baseline."""
+        def _dd(series: pd.Series) -> float:
+            equity = (1.0 + series.fillna(0.0)).cumprod().to_numpy()
+            if equity.size == 0:
+                return 0.0
+            peak = np.maximum.accumulate(equity)
+            return float(np.min(equity / peak - 1.0))
+
+        return _dd(self.oos_returns), _dd(self.baseline_oos_returns)
+
     def verdict(self) -> str:
         margin = self.oos_total - self.baseline_total
         wins = sum(f.test_geo_mean > f.baseline_test_geo_mean for f in self.folds)
+        dd_chosen, dd_base = self.oos_drawdown()
         header = (
-            f"out-of-sample: chosen {self.oos_total:+.2%} vs baseline {self.baseline_total:+.2%} "
-            f"({wins}/{len(self.folds)} folds beat the baseline)"
+            f"out-of-sample (selected on {self.score}): "
+            f"chosen {self.oos_total:+.2%} vs baseline {self.baseline_total:+.2%} "
+            f"({wins}/{len(self.folds)} folds beat the baseline)\n"
+            f"out-of-sample drawdown: chosen {dd_chosen:.1%} vs baseline {dd_base:.1%}"
         )
         if not self.switched:
             return header + (
@@ -159,7 +174,7 @@ class WalkForwardResult:
 
 
 def _geo_mean(returns: pd.Series) -> float:
-    """Per-session geometric mean; the selection score.
+    """Per-session geometric mean.
 
     Chosen over the arithmetic mean for the same reason as everywhere else in
     this project: the strategy compounds, and the variance drag is on the order
@@ -174,6 +189,36 @@ def _geo_mean(returns: pd.Series) -> float:
     return float(np.expm1(np.mean(np.log(gross))))
 
 
+def _calmar(returns: pd.Series) -> float:
+    """Compound growth divided by the depth of the worst drawdown in the window.
+
+    The score to select on when the problem is not "is there an edge" but "can
+    this be held". Selecting on return alone will happily pick an overlay that
+    earns more and hurts more; Calmar will not. A window with no drawdown at all
+    falls back to the geometric mean, since dividing by zero would make an
+    untested overlay look infinitely good.
+    """
+    r = returns.dropna().to_numpy(dtype="float64")
+    if r.size == 0:
+        return float("-inf")
+    gross = 1.0 + r
+    if np.any(gross <= 0):
+        return -1.0
+    equity = np.cumprod(gross)
+    peak = np.maximum.accumulate(equity)
+    depth = float(np.min(equity / peak - 1.0))
+    growth = float(np.expm1(np.mean(np.log(gross))))
+    if depth >= -1e-12:
+        return growth
+    return growth / abs(depth)
+
+
+SCORES: dict[str, Callable[[pd.Series], float]] = {
+    "geometric_mean": _geo_mean,
+    "calmar": _calmar,
+}
+
+
 def walk_forward(
     bars: pd.DataFrame,
     *,
@@ -182,6 +227,7 @@ def walk_forward(
     train_sessions: int = 756,
     test_sessions: int = 252,
     min_tail_sessions: int = 21,
+    score: str = "geometric_mean",
 ) -> WalkForwardResult:
     """Run the walk-forward protocol.
 
@@ -197,6 +243,9 @@ def walk_forward(
     candidates = list(candidates) if candidates is not None else default_candidates()
     if not any(c.name == "baseline" for c in candidates):
         raise ValueError("candidates must include a 'baseline' entry (the unfiltered strategy)")
+    if score not in SCORES:
+        raise KeyError(f"unknown score {score!r}; have {sorted(SCORES)}")
+    score_fn = SCORES[score]
     config = config or BacktestConfig()
 
     # Net return series per candidate, computed once over the full history.
@@ -222,7 +271,7 @@ def walk_forward(
         tr = slice(start, start + train_sessions)
         te = slice(start + train_sessions, start + train_sessions + test_len)
 
-        scores = {name: _geo_mean(series.iloc[tr]) for name, series in net.items()}
+        scores = {name: score_fn(series.iloc[tr]) for name, series in net.items()}
         chosen = max(scores, key=lambda k: scores[k])
 
         test_chunk = net[chosen].iloc[te]
@@ -264,4 +313,5 @@ def walk_forward(
         oos_returns=pd.concat(oos_parts),
         baseline_oos_returns=pd.concat(base_parts),
         candidate_names=[c.name for c in candidates],
+        score=score,
     )

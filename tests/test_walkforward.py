@@ -123,3 +123,48 @@ def test_a_tiny_tail_is_ignored():
     res = walk_forward(bars, candidates=_separating_candidates(),
                        train_sessions=756, test_sessions=252)
     assert len(res.folds) == 1
+
+
+def test_calmar_selection_prefers_holdability_over_raw_return():
+    """When the problem is a drawdown you cannot sit through, selecting on
+    return alone will happily pick the overlay that earns more and hurts more.
+    Selecting on Calmar must not."""
+    bars = _regime_bars()
+    cfg = BacktestConfig(cost=scenario("auction-retail"))
+    by_return = walk_forward(bars, config=cfg, score="geometric_mean")
+    by_calmar = walk_forward(bars, config=cfg, score="calmar")
+
+    dd_return, _ = by_return.oos_drawdown()
+    dd_calmar, _ = by_calmar.oos_drawdown()
+    assert dd_calmar >= dd_return, (
+        f"calmar selection produced a deeper drawdown ({dd_calmar:.1%}) than "
+        f"return selection ({dd_return:.1%})"
+    )
+    assert by_calmar.score == "calmar"
+    assert "calmar" in by_calmar.verdict()
+
+
+def test_oos_drawdown_reports_both_curves():
+    res = walk_forward(_regime_bars(2600), candidates=_separating_candidates(),
+                       train_sessions=756, test_sessions=252)
+    chosen, baseline = res.oos_drawdown()
+    assert chosen <= 0.0 and baseline <= 0.0
+    assert "drawdown" in res.verdict()
+
+
+def test_unknown_score_is_rejected():
+    with pytest.raises(KeyError, match="unknown score"):
+        walk_forward(_regime_bars(2600), score="sharpe_but_not_implemented")
+
+
+def test_calmar_falls_back_when_a_window_never_draws_down():
+    """Dividing by a zero drawdown would make an untested overlay look
+    infinitely good and win every fold."""
+    import numpy as np
+    import pandas as pd
+
+    from micronalgo.research.walkforward import _calmar, _geo_mean
+
+    rising = pd.Series(np.full(200, 0.001))
+    assert _calmar(rising) == pytest.approx(_geo_mean(rising))
+    assert np.isfinite(_calmar(rising))

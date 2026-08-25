@@ -334,7 +334,7 @@ def test_drawdown_episodes_handle_a_monotone_curve():
 def test_study_reports_drawdown_episodes():
     bars = random_walk(1500, seed=5, start="2015-01-02")
     r = run_study(bars, bootstrap_resamples=80)
-    assert set(["start", "trough", "depth", "ongoing"]).issubset(r.drawdowns.columns)
+    assert {"start", "trough", "depth", "ongoing"}.issubset(r.drawdowns.columns)
     if not r.drawdowns.empty:
         assert (r.drawdowns["depth"] <= 0).all()
 

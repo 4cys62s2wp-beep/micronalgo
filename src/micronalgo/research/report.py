@@ -132,6 +132,18 @@ def render_console(r: StudyResult, *, width: int = 100) -> str:
     out.append("   threshold. Note that Calmar barely changes down the column: sizing down buys")
     out.append("   survivability at a proportional cost in return. It does not make the trade")
     out.append("   better, it makes it holdable, and holdable is what a backtest silently assumes.")
+    out.append("")
+    out.append("   Note the sessions_under_water column: it barely moves. Sizing down makes the")
+    out.append("   drawdown SHALLOWER, not SHORTER -- the time spent below the old high is set by")
+    out.append("   the strategy, not by your size.")
+    passing = r.sizing[r.sizing["max_drawdown"] > -0.30] if not r.sizing.empty else r.sizing
+    if not passing.empty:
+        best = passing.index.max()
+        row = passing.loc[best]
+        out.append("")
+        out.append(f"   Largest size that keeps the drawdown inside -30 %: {best:.0%} of capital")
+        out.append(f"   ({row['cagr']:.1%} CAGR, {row['max_drawdown']:.1%} drawdown). Set it with")
+        out.append(f"   MICRONALGO_CAPITAL_FRACTION={best:g} in .env, or --leverage for research runs.")
 
     out.append("")
     out.append(" WORST OVERNIGHT GAPS  (held in full, no stop is possible)")

@@ -230,6 +230,7 @@ def cmd_walkforward(args: argparse.Namespace) -> int:
         config=BacktestConfig(cost=scenario(args.cost), initial_capital=settings.initial_capital),
         train_sessions=args.train,
         test_sessions=args.test,
+        score=args.score,
     )
     print(result.fold_table().to_string(float_format=lambda x: f"{x:,.2f}"))
     print()
@@ -552,6 +553,9 @@ def build_parser() -> argparse.ArgumentParser:
     wf.add_argument("--cost", default="auction-retail")
     wf.add_argument("--train", type=int, default=756, help="training sessions per fold (default 3y)")
     wf.add_argument("--test", type=int, default=252, help="test sessions per fold (default 1y)")
+    wf.add_argument("--score", default="geometric_mean", choices=["geometric_mean", "calmar"],
+                    help="what each fold selects on: raw compound growth, or growth per unit of "
+                         "drawdown. Use calmar when the problem is holdability, not edge.")
     wf.set_defaults(func=cmd_walkforward)
 
     pf = sub.add_parser("preflight", help="verify every runtime assumption against the broker")

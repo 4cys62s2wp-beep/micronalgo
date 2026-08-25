@@ -1,0 +1,43 @@
+# Fly.io-Konfiguration fuer micronalgo.
+#
+# Deployment ohne Mac:
+#   1. fly.io Konto anlegen (geht im Handy-Browser)
+#   2. Repo verbinden oder `fly launch --no-deploy` von irgendeinem Rechner
+#   3. Schluessel setzen:
+#        fly secrets set ALPACA_API_KEY_ID=... ALPACA_API_SECRET_KEY=...
+#   4. fly volumes create micronalgo_data --size 1
+#   5. fly deploy
+#
+# Siehe docs/CLOUD_SETUP.md fuer den kompletten Ablauf inklusive der
+# Handy-tauglichen Variante.
+
+app = "micronalgo"
+primary_region = "ewr"   # Newark: nah an den US-Boersen, spart Latenz
+
+[build]
+  dockerfile = "Dockerfile"
+
+[env]
+  MICRONALGO_BROKER = "alpaca"
+  MICRONALGO_ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+  MICRONALGO_SYMBOL = "MU"
+  # Trockenlauf bleibt an, bis Du ihn bewusst abschaltest:
+  #   fly secrets set MICRONALGO_DRY_RUN=false
+  MICRONALGO_DRY_RUN = "true"
+
+[mounts]
+  source = "micronalgo_data"
+  destination = "/data"
+
+# Genau EINE Maschine, die nie herunterskaliert. Zwei Instanzen wuerden sich
+# um dieselbe Position streiten; der Instanz-Lock im Code faengt das lokal ab,
+# aber ueber zwei Maschinen hinweg greift er nicht -- deshalb hier hart auf 1.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[processes]
+  app = "micronalgo paper"
+
+[deploy]
+  strategy = "immediate"   # kein rolling update: nie zwei Bots gleichzeitig

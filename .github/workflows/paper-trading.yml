@@ -1,0 +1,131 @@
+# micronalgo im Cron-Betrieb auf GitHub Actions.
+#
+# DER HANDY-WEG: komplett ohne Terminal und ohne Mac einzurichten. Schluessel
+# kommen in Settings -> Secrets and variables -> Actions (im Handy-Browser
+# machbar), danach laeuft das hier von selbst.
+#
+# EHRLICHE EINORDNUNG, BITTE LESEN
+# GitHub-Cron ist NICHT puenktlich: GitHub sagt selbst, dass Laeufe bei hoher
+# Last um 10+ Minuten verspaetet starten koennen. Ein 5-Minuten-Auktionsfenster
+# waere damit unzuverlaessig. Deshalb ist hier das Einstiegsfenster auf
+# close-40 bis close-10 verbreitert (30 Minuten), und der Cron laeuft alle 10
+# Minuten -- eine Verspaetung von 20 Minuten wird noch aufgefangen. Der Preis
+# dafuer: die Order wird frueher eingereicht, mit einem etwas aelteren
+# Referenzpreis fuer die Stueckzahl. Bei Privatanlegergroesse ist das
+# belanglos (capital_fraction laesst 5 % Luft), aber es ist ein Unterschied
+# zum Dauerbetrieb.
+#
+# Wenn es ernsthaft laufen soll, ist der Container die bessere Form:
+# siehe deploy/Dockerfile und docs/CLOUD_SETUP.md.
+
+name: paper trading
+
+on:
+  schedule:
+    # Zeiten in UTC. Die Boerse rechnet in America/New_York, das je nach
+    # Sommer-/Winterzeit UTC-4 oder UTC-5 ist -- die Fenster unten decken
+    # BEIDE Faelle ab. Welche Sitzungszeiten wirklich gelten, entscheidet
+    # ohnehin der Kalender im Programm, nicht dieser Ausdruck.
+    - cron: "*/10 12-14 * * 1-5"   # Ausstiegsfenster + Kontrolle nach Eroeffnung
+    - cron: "*/10 19-21 * * 1-5"   # Einstiegsfenster + Kontrolle nach Schluss
+  workflow_dispatch:                # Knopf zum Sofortstart, auch in der GitHub-App
+
+# Zwei gleichzeitige Laeufe wuerden sich um dieselbe Position streiten. Der
+# Instanz-Lock im Code schuetzt nur innerhalb einer Maschine, also hier hart
+# serialisieren. Laufende Laeufe NICHT abbrechen: ein halb erledigter Tick
+# waere schlimmer als ein verspaeteter.
+concurrency:
+  group: micronalgo-paper
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write            # nur, um den Zustand zurueckzuschreiben
+
+    env:
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+      MICRONALGO_BROKER: alpaca
+      MICRONALGO_ALPACA_BASE_URL: https://paper-api.alpaca.markets
+      MICRONALGO_SYMBOL: MU
+      MICRONALGO_STATE_DIR: runtime/state
+      MICRONALGO_LOG_DIR: runtime/logs
+      MICRONALGO_CACHE_DIR: runtime/cache
+      MICRONALGO_KILL_SWITCH_FILE: runtime/state/KILL
+      # Verbreitertes Einstiegsfenster, siehe Kommentar oben.
+      MICRONALGO_ENTRY_SUBMIT_OFFSET_MIN: "40"
+      MICRONALGO_ENTRY_CUTOFF_OFFSET_MIN: "10"
+      # Trockenlauf, bis Du in den Repository-Variablen DRY_RUN=false setzt.
+      # Bewusst eine Variable und kein Default im Code: das Umschalten auf
+      # echte Paper-Orders soll eine sichtbare Handlung sein.
+      MICRONALGO_DRY_RUN: ${{ vars.MICRONALGO_DRY_RUN || 'true' }}
+
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Zustand aus dem bot-state-Branch holen
+        # Der Zustand lebt in einem eigenen Branch, damit Code-Historie und
+        # Bot-Historie sich nie in die Quere kommen. Fehlt der Branch (erster
+        # Lauf), startet der Bot leer -- die Reconciliation gleicht dann gegen
+        # den Broker ab, der ohnehin die Wahrheit ist.
+        run: |
+          set -eu
+          mkdir -p runtime/state runtime/logs runtime/cache
+          if git fetch origin bot-state:bot-state 2>/dev/null; then
+            git --work-tree=runtime checkout bot-state -- state logs 2>/dev/null || true
+            echo "Zustand aus bot-state uebernommen."
+          else
+            echo "Kein bot-state-Branch, erster Lauf."
+          fi
+          git reset >/dev/null 2>&1 || true
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: micronalgo installieren
+        run: pip install --quiet -e ".[all]"
+
+      - name: Preflight
+        # Faellt der Preflight durch, wird NICHT gehandelt. Lieber eine
+        # ausgelassene Sitzung als eine Order auf Basis einer kaputten Annahme.
+        run: micronalgo preflight
+
+      - name: Tick
+        id: tick
+        run: micronalgo tick --no-stream
+
+      - name: Zustand zurueckschreiben
+        if: always()
+        run: |
+          set -eu
+          git config user.name  "micronalgo-bot"
+          git config user.email "noreply@anthropic.com"
+          git checkout -B bot-state
+          # Nur der Laufzeitzustand gehoert in diesen Branch, kein Code.
+          git rm -r --cached . -q
+          git add -f runtime/state runtime/logs 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Zustand unveraendert, kein Commit."
+          else
+            git commit -q -m "state $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push -f origin bot-state
+            echo "Zustand gesichert."
+          fi
+
+      - name: Zusammenfassung
+        if: always()
+        run: |
+          {
+            echo "### micronalgo tick"
+            echo ""
+            echo '```'
+            tail -20 runtime/logs/micronalgo.log 2>/dev/null || echo "(kein Log)"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

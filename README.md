@@ -120,6 +120,28 @@ deshalb rechnet der Bericht jedes Szenario einzeln durch.
 
 ---
 
+## Ohne Mac betreiben
+
+Der Bot braucht eine Maschine, die um 15:45 und 09:30 New Yorker Zeit wach ist
+-- ein Handy kann das nicht sein, weil iOS und Android Hintergrundprozesse
+beenden. Drei Wege, ehrlich sortiert:
+
+| Weg | Einrichtung vom Handy | Zuverlaessigkeit | Kosten |
+|---|---|---|---|
+| Container (`deploy/Dockerfile`, Fly.io/Railway) | fast vollstaendig | hoch, laeuft durch | ~0-5 $/Monat |
+| GitHub Actions (`.github/workflows/`) | **vollstaendig** | mittel, Cron ist unpuenktlich | 0 $ |
+| Mac mit launchd | nein, ein Terminalbefehl | hoch, solange er wach ist | 0 $ |
+
+Der Actions-Weg ist komplett im Handy-Browser einrichtbar: Schluessel als
+Repository-Secrets, Workflow aktivieren, fertig. Die Einschraenkung steht offen
+im Workflow: GitHub-Cron startet bei Last auch mal 10+ Minuten zu spaet, also
+ist das Einstiegsfenster dort auf 30 Minuten verbreitert (`close-40` bis
+`close-10`) und der Cron laeuft alle 10 Minuten -- selbst 25 Minuten
+Verspaetung landen noch im Fenster. Verpasst er es doch, ueberspringt er die
+Sitzung sicher.
+
+Kompletter Ablauf inklusive Not-Aus vom Handy: `docs/CLOUD_SETUP.md`.
+
 ## Auf dem Mac (komplette Software)
 
 ```bash
@@ -315,7 +337,7 @@ Backtest. Uebrig bleiben 0,003 % - reine Ganzstueck-Rundung.
 ## Tests
 
 ```bash
-pytest -q          # 203 Tests, kein Netzwerkzugriff
+pytest -q          # 206 Tests, kein Netzwerkzugriff
 ruff check src tests scripts
 ```
 

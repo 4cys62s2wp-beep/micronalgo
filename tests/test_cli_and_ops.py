@@ -285,3 +285,85 @@ def test_installer_templating_survives_metacharacter_paths(tmp_path):
     plist = plistlib.loads(rendered.encode())
     assert plist["ProgramArguments"][0] == nasty_repo + "/.venv/bin/micronalgo"
     assert plist["WorkingDirectory"] == nasty_repo
+
+
+def test_cloud_deploy_artifacts_are_wellformed():
+    """The container and cron paths are how this runs without a Mac, so their
+    config files get the same offline scrutiny as everything else."""
+    from pathlib import Path
+
+    import tomllib
+
+    root = Path(__file__).resolve().parents[1]
+
+    dockerfile = (root / "deploy" / "Dockerfile").read_text()
+    # zoneinfo has no data in a slim image, and every schedule in this project
+    # is expressed in America/New_York -- without tzdata the calendar raises.
+    assert "tzdata" in dockerfile
+    assert "VOLUME" in dockerfile
+    assert 'CMD ["micronalgo", "paper"]' in dockerfile, "dry-run must be the container default"
+
+    fly = tomllib.loads((root / "deploy" / "fly.toml").read_text())
+    assert fly["env"]["MICRONALGO_DRY_RUN"] == "true"
+    assert fly["mounts"]["destination"] == "/data"
+    # Two instances would fight over one position; the in-process lock cannot
+    # span machines, so the config must pin a single VM and forbid rolling.
+    assert len(fly["vm"]) == 1
+    assert fly["deploy"]["strategy"] == "immediate"
+
+
+def test_actions_workflow_is_wellformed():
+    from pathlib import Path
+
+    import yaml
+
+    root = Path(__file__).resolve().parents[1]
+    wf = yaml.safe_load((root / ".github" / "workflows" / "paper-trading.yml").read_text())
+    triggers = wf[True]  # pyyaml reads the `on:` key as the boolean True (YAML 1.1)
+    assert "workflow_dispatch" in triggers, "a manual run button is the phone-only escape hatch"
+    assert len(triggers["schedule"]) == 2
+
+    # Overlapping runs would race on one position; queue them, never cancel a
+    # half-finished tick.
+    assert wf["concurrency"]["cancel-in-progress"] is False
+
+    job = wf["jobs"]["tick"]
+    env = job["env"]
+    assert "true" in env["MICRONALGO_DRY_RUN"], "dry run must be the default"
+
+    # GitHub cron can fire 10+ minutes late, so the entry window is widened far
+    # beyond the default 5 minutes to absorb that.
+    submit = int(env["MICRONALGO_ENTRY_SUBMIT_OFFSET_MIN"])
+    cutoff = int(env["MICRONALGO_ENTRY_CUTOFF_OFFSET_MIN"])
+    assert submit - cutoff >= 25, f"window only {submit - cutoff} min wide; cron delay would miss it"
+
+    names = [s["name"] for s in job["steps"]]
+    assert "Preflight" in names and names.index("Preflight") < names.index("Tick"), (
+        "a failed preflight must prevent the tick, not follow it"
+    )
+
+
+def test_widened_window_absorbs_a_late_cron(monkeypatch):
+    """The workflow's own numbers, checked against the real calendar."""
+    import datetime as dt
+    from pathlib import Path
+
+    import yaml
+
+    from micronalgo.calendar_nyse import Calendar, ExchangeCalendarsSource
+    from micronalgo.config import Settings
+
+    root = Path(__file__).resolve().parents[1]
+    env = yaml.safe_load((root / ".github" / "workflows" / "paper-trading.yml").read_text())[
+        "jobs"]["tick"]["env"]
+    s = Settings(
+        entry_submit_offset_min=int(env["MICRONALGO_ENTRY_SUBMIT_OFFSET_MIN"]),
+        entry_cutoff_offset_min=int(env["MICRONALGO_ENTRY_CUTOFF_OFFSET_MIN"]),
+    )
+    cal = Calendar([ExchangeCalendarsSource()], strict=True)
+    for day in (dt.date(2025, 6, 10), dt.date(2024, 11, 29)):  # regular and a 13:00 half-day
+        session = cal.session(day)
+        submit, cutoff = s.entry_window(session.close_dt())
+        assert cutoff < session.close_dt()
+        for delay in (0, 10, 20):
+            assert submit <= submit + dt.timedelta(minutes=delay) <= cutoff

@@ -301,3 +301,39 @@ def test_unmeasurable_spread_does_not_manufacture_a_failure():
     assert "not measurable" in line.value
     # It must stay a live concern, not become an all-clear.
     assert "concern is real" in line.explanation
+
+
+def test_drawdown_episodes_on_a_known_shape():
+    """A headline max drawdown hides what matters: when, and for how long."""
+    import pandas as pd
+
+    eq = pd.Series([100, 120, 60, 80, 130, 140, 150, 120, 118],
+                   index=pd.bdate_range("2020-01-01", periods=9), dtype="float64")
+    ep = M.drawdown_episodes(eq)
+
+    assert len(ep) == 2
+    deep = ep.iloc[0]
+    assert deep["depth"] == pytest.approx(-0.5)
+    assert str(deep["start"]) == "2020-01-02"      # the peak the fall began from
+    assert str(deep["trough"]) == "2020-01-03"
+    assert not deep["ongoing"]
+
+    # The second is still under water at the end of the sample and must say so
+    # rather than being silently reported as recovered.
+    tail = ep.iloc[1]
+    assert tail["ongoing"] and pd.isna(tail["recovered"])
+
+
+def test_drawdown_episodes_handle_a_monotone_curve():
+    import pandas as pd
+
+    eq = pd.Series(range(1, 20), index=pd.bdate_range("2020-01-01", periods=19), dtype="float64")
+    assert M.drawdown_episodes(eq).empty
+
+
+def test_study_reports_drawdown_episodes():
+    bars = random_walk(1500, seed=5, start="2015-01-02")
+    r = run_study(bars, bootstrap_resamples=80)
+    assert set(["start", "trough", "depth", "ongoing"]).issubset(r.drawdowns.columns)
+    if not r.drawdowns.empty:
+        assert (r.drawdowns["depth"] <= 0).all()

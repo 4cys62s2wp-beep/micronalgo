@@ -93,6 +93,72 @@ def max_drawdown(equity: pd.Series | np.ndarray) -> tuple[float, int]:
     return mdd, int(longest)
 
 
+def drawdown_episodes(equity: pd.Series, top: int = 5) -> pd.DataFrame:
+    """The largest drawdowns, each with when it started, bottomed and recovered.
+
+    A single "max drawdown: -54 %" says almost nothing a person can act on. The
+    questions that decide whether a strategy is holdable are *when* and *how
+    long*: a -54 % episode that happened once in 2008 and recovered in a year is
+    a different proposition from one that recurs every three years, even though
+    both print the same headline number.
+
+    An episode runs from the equity peak, through the trough, to the session
+    that first exceeds the old peak. An episode still under water at the end of
+    the sample has no recovery date and is reported as ongoing -- silently
+    treating it as recovered would be the flattering error.
+    """
+    eq = equity.dropna().astype("float64")
+    if eq.empty:
+        return pd.DataFrame(
+            columns=["start", "trough", "recovered", "depth", "sessions_to_trough",
+                     "sessions_to_recover", "ongoing"]
+        )
+
+    values = eq.to_numpy()
+    index = eq.index
+    peaks = np.maximum.accumulate(values)
+    under = values < peaks
+
+    episodes: list[dict] = []
+    i = 0
+    n = len(values)
+    while i < n:
+        if not under[i]:
+            i += 1
+            continue
+        start_pos = i - 1 if i > 0 else 0        # the peak the fall began from
+        j = i
+        while j < n and under[j]:
+            j += 1
+        segment = values[i:j]
+        trough_off = int(np.argmin(segment))
+        trough_pos = i + trough_off
+        peak_value = values[start_pos]
+        recovered = j < n
+        episodes.append(
+            {
+                "start": index[start_pos],
+                "trough": index[trough_pos],
+                "recovered": index[j] if recovered else pd.NaT,
+                "depth": float(values[trough_pos] / peak_value - 1.0),
+                "sessions_to_trough": trough_pos - start_pos,
+                "sessions_to_recover": (j - start_pos) if recovered else (n - start_pos),
+                "ongoing": not recovered,
+            }
+        )
+        i = j
+
+    if not episodes:
+        return pd.DataFrame(
+            columns=["start", "trough", "recovered", "depth", "sessions_to_trough",
+                     "sessions_to_recover", "ongoing"]
+        )
+    frame = pd.DataFrame(episodes).sort_values("depth").head(top).reset_index(drop=True)
+    for col in ("start", "trough", "recovered"):
+        frame[col] = pd.to_datetime(frame[col]).dt.date
+    return frame
+
+
 def probabilistic_sharpe(sr: float, n: int, skew: float, excess_kurt: float, benchmark_sr: float = 0.0) -> float:
     """P(true Sharpe > ``benchmark_sr``) given the sample's higher moments.
 

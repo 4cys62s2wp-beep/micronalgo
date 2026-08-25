@@ -113,6 +113,16 @@ def render_console(r: StudyResult, *, width: int = 100) -> str:
     out.append(_indent(r.drop_best.to_string(float_format=lambda x: f"{x:,.4f}"), 3))
 
     out.append("")
+    out.append(" DRAWDOWN EPISODES  (when, how deep, how long under water)")
+    out.append(thin)
+    if not r.drawdowns.empty:
+        out.append(_indent(r.drawdowns.to_string(float_format=lambda x: f"{x:,.4f}"), 3))
+    out.append("")
+    out.append("   A headline max drawdown says nothing a person can act on. What decides")
+    out.append("   whether you actually hold the trade is WHEN it happened and HOW LONG it")
+    out.append("   lasted -- once in a crisis and recovered, or every few years.")
+
+    out.append("")
     out.append(" WORST OVERNIGHT GAPS  (held in full, no stop is possible)")
     out.append(thin)
     out.append(_indent(r.worst_gaps.to_string(float_format=lambda x: f"{x:,.4f}"), 3))
@@ -402,6 +412,14 @@ cannot separate the two explanations. The spread here is estimated from daily hi
 <h2>Is it a handful of sessions?</h2>
 {_table(r.drop_best)}
 {fig('distribution', 'Overnight return distribution. The log-scaled y-axis makes the tail honest.')}
+
+<h2>Drawdown episodes</h2>
+<p class="sub">When each one started, how deep it went, and how long it took to recover.</p>
+{_table(r.drawdowns)}
+<div class="note">A headline max drawdown says nothing a person can act on. What decides whether
+you actually hold the trade is <em>when</em> it happened and <em>how long</em> it lasted &mdash;
+once in a crisis and recovered, or every few years. An episode still under water at the end of the
+sample is marked <code>ongoing</code>.</div>
 
 <h2>The risk actually borne</h2>
 <p class="sub">You hold every earnings gap overnight, and there is no stop-loss while the market is shut.</p>

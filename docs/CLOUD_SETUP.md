@@ -57,10 +57,32 @@ fly.io, die im Handy-Browser funktioniert. Danach reicht die Weboberflaeche.
 
 Komplett im Handy-Browser oder in der GitHub-App einrichtbar, ohne Terminal.
 
+### Schritt 0, ohne den nichts passiert: nach `main` zusammenfuehren
+
+GitHub startet zeitgesteuerte Ablaeufe (`schedule`) und zeigt den *Run
+workflow*-Knopf (`workflow_dispatch`) **ausschliesslich** fuer Workflow-Dateien
+auf dem **Standardzweig**. Liegt der Code nur im Entwicklungszweig, passiert
+gar nichts -- und es erscheint auch kein Knopf. Keine Fehlermeldung, einfach
+Stille. Das ist GitHub-Verhalten, kein Fehler im Bot.
+
+Einmal zusammenfuehren, geht vom Handy:
+
+```
+https://github.com/4cys62s2wp-beep/micronalgo/compare/main...claude/micron-trading-algo-fy4q2o
+```
+
+*Create pull request* -> *Merge pull request*. Erst danach greifen die Schritte
+unten.
+
+### Danach
+
 1. **Repo-Secrets setzen** -- Settings -> Secrets and variables -> Actions ->
    New repository secret:
    * `ALPACA_API_KEY_ID`
    * `ALPACA_API_SECRET_KEY`
+
+   Fehlt einer, bricht der Lauf mit einer Klartextmeldung ab, die den fehlenden
+   Namen nennt -- nicht mit einem HTTP 403, das nach Netzproblem aussieht.
 2. **Workflow aktivieren** -- Actions-Tab oeffnen, "paper trading" auswaehlen,
    "Enable workflow".
 3. **Testlauf** -- "Run workflow" antippen. Laeuft im Trockenlauf, sendet also
@@ -87,11 +109,45 @@ Bei Privatanlegergroesse ist das belanglos (`capital_fraction` laesst 5 % Luft).
 Verpasst er das Fenster doch, **ueberspringt** er die Sitzung sicher -- er jagt
 der Auktion nie hinterher. Du verlierst dann eine Gelegenheit, kein Geld.
 
+### Nicht-US-Konten: Alpaca Europe
+
+Der Standard-Endpunkt ist `https://paper-api.alpaca.markets`. Alpaca Europe
+benutzt einen anderen Hostnamen, und die Sicherung im Code erkennt ihn dann
+nicht als Papierkonto. Beides sind Repository-*Variablen* (nicht Secrets):
+
+* `MICRONALGO_ALPACA_BASE_URL` = Dein Paper-Endpunkt
+* `MICRONALGO_ALPACA_PAPER` = `true`
+
+Die zweite Variable ist die ausdrueckliche Erklaerung "das ist ein Papierkonto".
+Sie existiert getrennt, damit die Sicherung nie ueber eine Namensaehnlichkeit
+entscheidet.
+
 ### Wo der Zustand lebt
 
 In einem eigenen Branch `bot-state`, damit Code-Historie und Bot-Historie sich
 nie in die Quere kommen. Jeder Lauf holt ihn, arbeitet damit, schreibt ihn
 zurueck -- ein vollstaendiges, nachlesbares Protokoll jeder Entscheidung.
+
+Die Pfade beim Holen und beim Zurueckschreiben muessen exakt uebereinstimmen.
+Sie taten es einmal nicht, und weil git seinen Fehler nach `/dev/null` schrieb,
+meldete der Schritt trotzdem Erfolg -- der Bot startete jedes Mal mit leerem
+Zustand, waehrend das Protokoll das Gegenteil behauptete. Der Schritt **zaehlt**
+deshalb heute die wiederhergestellten Dateien und gibt die Zahl aus, statt
+Erfolg zu behaupten.
+
+### Die Untersuchung ohne Rechner
+
+Zweiter Ablauf im selben Repo: **Untersuchung**. `micronalgo study` braucht
+Kursdaten aus dem Netz -- genau das, was ein Handy nicht kann, ein Runner aber
+schon.
+
+*Actions* -> **Untersuchung** -> *Run workflow*. Vorgaben (`study`, ab
+`2007-01-01`) einfach bestaetigen. Nach ein paar Minuten steht der vollstaendige
+Bericht in der Zusammenfassung des Laufs; zusaetzlich haengt er als Artefakt
+(`.txt`, `.html`, `.json`) am Lauf.
+
+Ein **FAIL**-Urteil laesst den Lauf bewusst **gruen**: es ist ein Befund ueber
+die Strategie, kein Defekt der Software. Rot wird nur ein echter Absturz.
 
 ### Not-Aus vom Handy
 

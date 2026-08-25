@@ -32,6 +32,91 @@ Repository da.
 
 ---
 
+## Das Ergebnis
+
+Die Zahlen unten stammen aus echten Laeufen auf bereinigten Tageskursen, nach
+Auktionskosten (MOC/OPG, Privatgroesse). Nachrechnen laesst sich das jederzeit
+mit `micronalgo study` - oder, ohne Rechner, ueber den Actions-Ablauf
+**Untersuchung** (siehe unten).
+
+### Handelbare Aera, 2007 - 2026
+
+| | |
+|---|---|
+| Uebernacht, gesamt | **+169.168,6 %** |
+| pro Jahr (CAGR) | **45,13 %** |
+| Sharpe | 1,375 |
+| Pruefungen | 10 PASS, 1 WARN, 1 FAIL |
+
+Die Behauptung lautete +140.000 %. Gemessen kommen +169.168,6 % heraus. Der
+Effekt ist also da, und er ist gross.
+
+### Volle Historie ab 1984 - und warum sie nicht zaehlt
+
+| Strategie | Gesamtrendite |
+|---|---|
+| nur uebernacht | +386.070.427,9 % |
+| nur tagsueber | -100 % |
+| Buy & Hold | +68.970,7 % |
+
+Vor der Dezimalisierung 2001 waren die Geld-Brief-Spannen rund zehnmal so breit,
+und Auktionsorders in heutiger Form gab es nicht. Eine Achtel-Dollar-Spanne pro
+Nacht erzeugt in der Rueckrechnung Rendite, die niemand haette einsammeln
+koennen. Deshalb ist **2007 - 2026** der Zeitraum, ueber den zu reden sich lohnt.
+
+### Haengt es an perfekter Ausfuehrung? Nein.
+
+| Kostenannahme, ab 2007 | Gesamtrendite |
+|---|---|
+| Auktion, Privatgroesse | +169.169 % |
+| Broker-typisch (IBKR) | +8.991 % |
+| volle Spanne bezahlt | +5.050 % |
+
+Selbst wenn jede Order die volle Spanne zahlt - die pessimistischste vertretbare
+Annahme - bleibt der Vorsprung stehen. Das war die wichtigste offene Frage und
+ist damit geklaert.
+
+### Der eine durchgefallene Test
+
+```
+[FAIL] max drawdown   -54,0 % ueber 625 Sitzungen   (Schwelle: > -30 %)
+```
+
+Dezember 2021 bis Juni 2024. Zweieinhalb Jahre unter dem alten Hoechststand.
+Die weiteren Rueckgaenge: -31,7 % (2015), -39,5 % (2018), -40,9 % (2020),
+-27,5 % (2024/25).
+
+Die Antwort darauf ist nicht, die Schwelle zu verschieben, sondern kleiner zu
+handeln. Die Groessentabelle im Report rechnet aus, wie viel kleiner:
+
+| Kapitalanteil | pro Jahr | groesster Rueckgang |
+|---|---|---|
+| 100 % | 45,13 % | -54,0 % |
+| **35 %** | **15,1 %** | **-23,0 %** |
+
+35 % ist der groesste Anteil, der den historischen Rueckgang innerhalb von
+-30 % haelt: `MICRONALGO_CAPITAL_FRACTION=0.35`.
+
+**Wichtig und selten gesagt:** Kleiner handeln macht den Rueckgang *flacher,
+nicht kuerzer*. Die Zahl der Sitzungen unter Wasser aendert sich kaum (624 -> 609)
+- sie haengt an der Strategie, nicht an Deiner Groesse.
+
+### Die verbleibende Unbekannte
+
+```
+[WARN] edge vs. effective spread   nicht messbar aus Tagesdaten
+```
+
+Wenn Schlusskurse systematisch auf der Geldseite und Eroeffnungskurse auf der
+Briefseite gedruckt werden, entsteht jede Nacht scheinbare Rendite ohne
+Wirtschaftlichkeit dahinter. Aus Tagesbalken ist das **nicht** zu entscheiden:
+der einzige verfuegbare Schaetzer (Corwin-Schultz) rauscht bei Microns
+Schwankung staerker, als die gesuchte Spanne gross ist. Der Bericht sagt
+deshalb "nicht messbar" statt einer Zahl, die nach Antwort aussieht. Was es
+klaeren wuerde: Quote- oder Minutendaten.
+
+---
+
 ## Was Du sofort ausprobieren kannst
 
 ```bash
@@ -51,13 +136,14 @@ micronalgo study --provider csv:/pfad/zu/MU.csv   # falls kein Provider erreichb
 
 Das schreibt `reports/mu_overnight_<datum>.{txt,html,json}`.
 
-> **Hinweis zur Entstehung:** Diese Umgebung hatte eine strikte Egress-Policy -
+> **Hinweis zur Entstehung:** Die Bau-Umgebung hatte eine strikte Egress-Policy -
 > Stooq, Yahoo, Alpaca, Tiingo, Polygon und Nasdaq waren alle mit 403 gesperrt.
-> Die echten MU-Zahlen konnte ich hier deshalb **nicht** ziehen. Stattdessen ist
-> die gesamte Engine gegen synthetische Reihen mit analytisch bekanntem Ergebnis
-> verifiziert (Abweichung 2e-15), und jeder Netzwerk-Parser wird gegen
-> aufgezeichnete Antworten getestet. Der Befehl oben liefert Dir die echten
-> Zahlen auf Deinem Rechner.
+> Die MU-Zahlen konnten dort deshalb nicht gezogen werden; die Engine ist
+> stattdessen gegen synthetische Reihen mit analytisch bekanntem Ergebnis
+> verifiziert (Abweichung 2e-15), und jeder Netzwerk-Parser gegen aufgezeichnete
+> Antworten getestet. Die Zahlen unter "Das Ergebnis" stammen aus echten Laeufen
+> ausserhalb dieser Umgebung und lassen sich mit dem Befehl oben reproduzieren -
+> oder ohne Rechner ueber den Actions-Ablauf **Untersuchung**.
 
 ---
 
@@ -132,13 +218,49 @@ beenden. Drei Wege, ehrlich sortiert:
 | GitHub Actions (`.github/workflows/`) | **vollstaendig** | mittel, Cron ist unpuenktlich | 0 $ |
 | Mac mit launchd | nein, ein Terminalbefehl | hoch, solange er wach ist | 0 $ |
 
-Der Actions-Weg ist komplett im Handy-Browser einrichtbar: Schluessel als
-Repository-Secrets, Workflow aktivieren, fertig. Die Einschraenkung steht offen
-im Workflow: GitHub-Cron startet bei Last auch mal 10+ Minuten zu spaet, also
-ist das Einstiegsfenster dort auf 30 Minuten verbreitert (`close-40` bis
-`close-10`) und der Cron laeuft alle 10 Minuten -- selbst 25 Minuten
-Verspaetung landen noch im Fenster. Verpasst er es doch, ueberspringt er die
-Sitzung sicher.
+### Voraussetzung: der Code muss auf `main` liegen
+
+**Das ist der haeufigste Stolperstein, und er hat nichts mit dem Code zu tun.**
+GitHub startet zeitgesteuerte Ablaeufe (`schedule`) und zeigt den
+*Run workflow*-Knopf (`workflow_dispatch`) **ausschliesslich** fuer Dateien auf
+dem Standardzweig. Solange alles nur im Entwicklungszweig liegt, passiert
+nichts -- und es erscheint auch kein Knopf, den man druecken koennte. Kein
+Fehler, keine Meldung, einfach Stille.
+
+Also einmal zusammenfuehren, das geht auch vom Handy:
+
+```
+https://github.com/4cys62s2wp-beep/micronalgo/compare/main...claude/micron-trading-algo-fy4q2o
+```
+
+*Create pull request* -> *Merge pull request*. Danach greifen Zeitplan und
+Knoepfe.
+
+### Der Rest ist Handy-Arbeit
+
+Schluessel als Repository-Secrets (`ALPACA_API_KEY_ID`,
+`ALPACA_API_SECRET_KEY`), fertig. Fehlt einer, sagt der Lauf das im Klartext,
+statt an einer 403-Meldung zu scheitern, die nach Netzproblem aussieht.
+
+Die Einschraenkung steht offen im Workflow: GitHub-Cron startet bei Last auch
+mal 10+ Minuten zu spaet, also ist das Einstiegsfenster dort auf 30 Minuten
+verbreitert (`close-40` bis `close-10`) und der Cron laeuft alle 10 Minuten --
+selbst 25 Minuten Verspaetung landen noch im Fenster. Verpasst er es doch,
+ueberspringt er die Sitzung sicher.
+
+### Die Untersuchung ohne Rechner: Ablauf "Untersuchung"
+
+`micronalgo study` braucht Kursdaten aus dem Netz -- genau das, was ein Handy
+nicht kann. Ein GitHub-Runner kann es. Also: *Actions* -> **Untersuchung** ->
+*Run workflow*. Die Vorgaben (`study`, ab `2007-01-01`) stimmen bereits.
+
+Nach ein paar Minuten steht der vollstaendige Bericht in der Zusammenfassung des
+Laufs, lesbar in der GitHub-App. Der Bericht wandert zusaetzlich als Artefakt
+(`.txt`, `.html`, `.json`) in den Lauf.
+
+Ein **FAIL**-Urteil laesst den Lauf bewusst gruen: es ist ein Befund ueber die
+Strategie, kein Defekt der Software -- und ein rotes X liest sich am Handy wie
+"kaputt". Rot wird nur, was wirklich abgestuerzt ist.
 
 Kompletter Ablauf inklusive Not-Aus vom Handy: `docs/CLOUD_SETUP.md`.
 

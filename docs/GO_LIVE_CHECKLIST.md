@@ -41,6 +41,26 @@ genuegen.
       ausgehalten haettest, ohne abzuschalten. Jeder Backtest unterstellt still,
       dass Du das tust.
 
+      Konkret bei MU ab 2007: **-54,0 % von Dezember 2021 bis Juni 2024**, also
+      625 Sitzungen -- zweieinhalb Jahre -- unter dem alten Hoechststand. Aus
+      100.000 EUR werden zwischendurch 46.000 EUR, und sie bleiben es lange.
+      Diese Pruefung faellt im Bericht mit **FAIL** durch, gegen eine Schwelle
+      von -30 %.
+
+- [ ] Du hast die **Groessentabelle** im Bericht gelesen und die Positionsgroesse
+      bewusst gesetzt, statt den Standardwert stehen zu lassen. Bei MU haelt
+      `MICRONALGO_CAPITAL_FRACTION=0.35` den historischen Rueckgang bei -23,0 %,
+      zum Preis von 15,1 % statt 45,1 % pro Jahr.
+
+      Und Du hast verstanden, was Verkleinern **nicht** leistet: der Rueckgang
+      wird flacher, nicht kuerzer. Die Zahl der Sitzungen unter Wasser aendert
+      sich kaum (624 -> 609). Die Zeit haengt an der Strategie, nicht an Deiner
+      Groesse.
+
+- [ ] Du hast die Schwellen im Bericht **nicht** angefasst, nachdem Du das
+      Ergebnis gesehen hast. Einen Messfehler zu korrigieren ist erlaubt; einen
+      Torpfosten zu verschieben, weil der Ball daneben ging, ist es nicht.
+
 ## 3. Die Ausfuehrung ist verifiziert, nicht angenommen
 
 - [ ] `micronalgo preflight --probe-orders` laeuft **sauber gegen Dein echtes

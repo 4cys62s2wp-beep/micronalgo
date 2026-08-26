@@ -23,6 +23,11 @@ from urllib.parse import urlparse
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Die Eroeffnungsauktion schliesst die Orderannahme zwei Minuten vor der
+# Eroeffnung (09:28 bei einer 09:30-Eroeffnung). Drei Minuten Abstand laesst
+# eine Minute Luft und bleibt sicher darunter.
+OPG_CUTOFF_MARGIN_MIN = 3
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -217,6 +222,17 @@ class Settings(BaseSettings):
             raise ValueError("entry_cutoff_offset_min must be smaller than entry_submit_offset_min")
         if self.exit_cutoff_offset_min >= self.exit_submit_offset_min:
             raise ValueError("exit_cutoff_offset_min must be smaller than exit_submit_offset_min")
+        # Die Eroeffnungsauktion nimmt 'opg' nur bis zwei Minuten vor der
+        # Eroeffnung an. Ein zu eng gesetztes Ausstiegsfenster wuerde die Order
+        # also genau dann ablehnen lassen, wenn eine Position offen ist und
+        # geschlossen werden muss -- der teuerste denkbare Zeitpunkt fuer diesen
+        # Fehler. Deshalb hier, beim Setzen, statt spaeter im Handel.
+        if self.exit_cutoff_offset_min < OPG_CUTOFF_MARGIN_MIN:
+            raise ValueError(
+                f"exit_cutoff_offset_min must be at least {OPG_CUTOFF_MARGIN_MIN}: the opening "
+                f"auction stops accepting 'opg' orders two minutes before the open, so a smaller "
+                f"value would submit the exit after the venue's cutoff"
+            )
         return self
 
     # ---------------------------------------------------------------- helpers

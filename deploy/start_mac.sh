@@ -153,7 +153,8 @@ warn "Prueft, ob die Auktionsorders (MOC/OPG) wirklich akzeptiert werden."
 warn "Das ist die Annahme, an der die gesamte Strategie haengt."
 if ! "$BIN" preflight --probe-orders; then
     die "Preflight nicht bestanden. Es wird nichts gehandelt, bevor das sauber ist.
-       Haeufigste Ursachen: falsche Schluessel, oder Live- statt Paper-Schluessel."
+       Lies die [FAIL]-Zeile oben -- sie benennt die Ursache genauer, als eine
+       Liste haeufiger Ursachen es koennte. [WARN] ist kein Grund zum Abbruch."
 fi
 
 # --------------------------------------------------------------- 4. Studie

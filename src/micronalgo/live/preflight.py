@@ -212,6 +212,20 @@ def run_preflight(
     return report
 
 
+# Die Eroeffnungsauktion nimmt Orders nur ausserhalb der Sitzung an: nach 19:00
+# und vor 09:28 Ortszeit der Boerse. Das ist eine Regel der Auktion selbst (der
+# Annahmeschluss liegt zwei Minuten vor der Eroeffnung), keine Eigenart eines
+# Brokers -- Alpaca gibt sie als HTTP 403 mit code 40310000 zurueck.
+OPG_WINDOW_OPENS = dt.time(19, 0)
+OPG_WINDOW_CLOSES = dt.time(9, 28)
+
+
+def _opg_submittable(now: dt.datetime) -> bool:
+    """Ob eine 'opg'-Order zu dieser Tageszeit ueberhaupt angenommen wird."""
+    t = now.timetz().replace(tzinfo=None)
+    return t >= OPG_WINDOW_OPENS or t < OPG_WINDOW_CLOSES
+
+
 def _probe_order_types(settings: Settings, broker: Broker, calendar: Calendar,
                        now: dt.datetime) -> list[Check]:
     """Submit and immediately cancel a 1-share auction order of each type.
@@ -242,6 +256,24 @@ def _probe_order_types(settings: Settings, broker: Broker, calendar: Calendar,
             )]
 
     for tif, label in ((TimeInForce.CLS, "market-on-close"), (TimeInForce.OPG, "market-on-open")):
+        # Mitten in der Sitzung eine 'opg'-Order einzureichen, wird von der
+        # Auktion abgelehnt -- unabhaengig davon, ob das Konto sie grundsaetzlich
+        # akzeptiert. Ein FAIL waere hier also eine Aussage ueber die Uhrzeit,
+        # nicht ueber die Annahme, und genau so wurde er auch schon
+        # missverstanden ("falsche Schluessel?"). Deshalb WARN statt FAIL, mit
+        # der Uhrzeit, zu der die Antwort zu holen ist.
+        if tif is TimeInForce.OPG and not _opg_submittable(now):
+            checks.append(Check(
+                f"order_type_{tif.value}", False,
+                f"zu dieser Tageszeit nicht pruefbar: die Eroeffnungsauktion nimmt "
+                f"'opg' nur zwischen {OPG_WINDOW_OPENS:%H:%M} und "
+                f"{OPG_WINDOW_CLOSES:%H:%M} Boersenzeit an, jetzt ist es "
+                f"{now:%H:%M} -- Preflight in diesem Fenster wiederholen. Der Bot "
+                f"selbst reicht erst 60 bis 5 Minuten vor der Eroeffnung ein und "
+                f"liegt damit innerhalb",
+                critical=False,
+            ))
+            continue
         cid = make_client_order_id(
             "probe", settings.symbol, now.date(), tif.value, int(now.timestamp()) % 1000
         )

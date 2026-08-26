@@ -269,3 +269,51 @@ def test_sizing_leaves_buying_power_headroom(settings):
 def test_sizing_refuses_nonsense(settings):
     assert not target_shares(0.0, 100.0, settings).tradable
     assert not target_shares(100_000.0, 0.0, settings).tradable
+
+
+# ------------------------------------------------- die Eroeffnungsauktion
+# Der Preflight meldete hier einmal FAIL, weil er mitten in der Sitzung lief:
+# die Auktion nimmt 'opg' nur ausserhalb der Handelszeit an. Das ist eine
+# Aussage ueber die Uhrzeit, nicht ueber das Konto -- und wurde prompt als
+# "falsche Schluessel" fehlgedeutet.
+
+def test_opg_window_matches_the_auction_rule():
+    import datetime as dt
+
+    from micronalgo.calendar_nyse import NY
+    from micronalgo.live.preflight import _opg_submittable
+
+    def at(h, m):
+        return _opg_submittable(dt.datetime(2026, 8, 26, h, m, tzinfo=NY))
+
+    assert not at(15, 31), "mitten in der Sitzung nimmt die Auktion nichts an"
+    assert not at(9, 30), "zur Eroeffnung ist es zu spaet"
+    assert not at(9, 28), "09:28 ist der Annahmeschluss, nicht mehr davor"
+    assert at(9, 27), "eine Minute vor Schluss geht noch"
+    assert at(8, 30), "das Einreichfenster des Bots liegt hier"
+    assert not at(18, 59), "vor 19:00 ist das Fenster noch zu"
+    assert at(19, 0) and at(23, 30) and at(0, 15), "abends und nachts offen"
+
+
+def test_the_bots_exit_window_lies_inside_the_auction_window(settings):
+    """Die Vorgabe muss einreichen, solange die Auktion noch annimmt."""
+    import datetime as dt
+
+    from micronalgo.calendar_nyse import NY
+    from micronalgo.live.preflight import _opg_submittable
+
+    session_open = dt.datetime(2026, 8, 26, 9, 30, tzinfo=NY)
+    submit_at, cutoff = settings.exit_window(session_open)
+    assert _opg_submittable(submit_at), "der Bot reicht zu frueh fuer die Auktion ein"
+    assert _opg_submittable(cutoff), "der harte Cutoff liegt hinter dem Annahmeschluss"
+
+
+def test_an_exit_window_past_the_auction_cutoff_is_refused():
+    """Zu eng gesetzt wuerde die Ausstiegsorder abgelehnt -- mit offener Position."""
+    import pytest
+
+    from micronalgo.config import Settings
+
+    for zu_eng in (2, 1, 0):
+        with pytest.raises(ValueError, match="opening auction"):
+            Settings(exit_cutoff_offset_min=zu_eng)

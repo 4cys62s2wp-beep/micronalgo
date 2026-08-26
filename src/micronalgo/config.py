@@ -65,7 +65,19 @@ class Settings(BaseSettings):
 
     # ---------------------------------------------------------------- sizing
     initial_capital: float = 100_000.0
-    capital_fraction: float = 0.95
+    capital_fraction: float = 0.35
+    """Anteil des Eigenkapitals, der in der Position steckt.
+
+    0.35 ist kein runder Vorsichtswert, sondern das Ergebnis der
+    Groessentabelle im Bericht: der groesste Anteil, der den historisch
+    gemessenen Rueckgang von -54 % noch innerhalb der -30 %-Schwelle haelt
+    (-23.0 %, zum Preis von 15.1 % statt 45.1 % pro Jahr).
+
+    Frueher stand hier 0.95 -- gedacht als "fast alles einsetzen, 5 % Luft
+    fuer Preisbewegungen zwischen Referenzkurs und Ausfuehrung". Das ist eine
+    Antwort auf die Frage nach der Stueckzahl, nicht auf die nach dem Risiko,
+    und es widersprach der Empfehlung, die derselbe Bericht ausspricht. Wer
+    die volle Groesse will, setzt sie ausdruecklich."""
     """Fraction of account equity deployed per trade. Below 1.0 so a fill above
     the expected price cannot reject for insufficient buying power."""
 

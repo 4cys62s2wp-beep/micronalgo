@@ -90,8 +90,14 @@ def test_matches_the_backtest_to_share_rounding(rig):
     _drive(bot, broker, _sessions(bars, cal))
     sim_equity = broker.get_account().equity
 
-    expected = simulate(bars, BacktestConfig(mode="overnight", cost=scenario("frictionless"),
-                                             initial_capital=100_000.0, leverage=0.95))
+    # Die Groesse aus den Settings lesen, nicht abschreiben: stand hier 0.95
+    # fest, brach der Test in dem Moment, in dem die Voreinstellung auf 0.35
+    # wanderte -- und zwar mit einer Meldung ueber Aktienrundung, die nichts
+    # mit der eigentlichen Ursache zu tun hatte. Der Vergleich gilt fuer jede
+    # Groesse; genau das soll er auch aussagen.
+    expected = simulate(bars, BacktestConfig(
+        mode="overnight", cost=scenario("frictionless"), initial_capital=100_000.0,
+        leverage=bot.settings.capital_fraction))
     assert sim_equity == pytest.approx(float(expected.equity.iloc[-1]), rel=2e-3)
 
 

@@ -68,7 +68,21 @@ fi
 [ -x "$VENV/bin/python" ] || "$PY" -m venv "$VENV"
 "$VENV/bin/pip" install --quiet --upgrade pip
 "$VENV/bin/pip" install --quiet -e ".[all]"
-printf '    Python %s (%s), micronalgo installiert.\n' "$PYVER" "$PY"
+# Der gefundene Interpreter kann in einem fremden venv liegen -- `command -v
+# python3.12` zeigt dorthin, solange es aktiv ist. Das ist unschaedlich: er
+# dient nur als Basis fuer das eigene venv, installiert wird ausschliesslich
+# nach $VENV. Die Meldung sagt das ausdruecklich, weil sie sonst so aussieht,
+# als widerspraeche sie der Zeile "wird ignoriert" darueber.
+case "${VIRTUAL_ENV:-}" in
+    "") printf '    Python %s (%s)\n' "$PYVER" "$PY" ;;
+    *)  case "$PY" in
+            "$VIRTUAL_ENV"/*)
+                printf '    Python %s -- Basis-Interpreter aus dem aktiven venv geliehen,\n' "$PYVER"
+                printf '    dort wird aber NICHTS installiert.\n' ;;
+            *)  printf '    Python %s (%s)\n' "$PYVER" "$PY" ;;
+        esac ;;
+esac
+printf '    micronalgo installiert nach %s\n' "$VENV"
 
 # --------------------------------------------------------------- 2. Zugang
 say "2/6  Alpaca-Paper-Zugang"

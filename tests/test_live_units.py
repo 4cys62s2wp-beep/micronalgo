@@ -317,3 +317,49 @@ def test_an_exit_window_past_the_auction_cutoff_is_refused():
     for zu_eng in (2, 1, 0):
         with pytest.raises(ValueError, match="opening auction"):
             Settings(exit_cutoff_offset_min=zu_eng)
+
+
+# --------------------------------------------------- der Trockenlauf muss reden
+# Ein Trockenlauf, den man nicht sieht, ist kein Trockenlauf. Die Aktion
+# 'dry_run' stand nicht in der Notifier-Menge und fiel damit stumm zu Boden --
+# der Bot entschied korrekt, schrieb ins Audit-Log, und auf der Konsole blieb
+# es still, waehrend jemand danebensass und auf ein Lebenszeichen wartete.
+
+def test_every_action_reaches_the_console(caplog):
+    import logging
+    import threading
+
+    from micronalgo.live.runner import Action
+    from micronalgo.live.scheduler import NOTIFY_KINDS, run
+
+    class Bot:
+        """Gibt in der ersten Runde je eine stille und eine laute Aktion aus."""
+
+        def __init__(self, settings):
+            self.settings = settings
+            self.calendar = type("C", (), {"authority": "test", "session": lambda *_: None})()
+            self.broker = type("B", (), {"name": "stub"})()
+            self.state = type("S", (), {"halted": False, "halt_reason": ""})()
+            self.errors = type("E", (), {"record": lambda *_: None})()
+
+        def tick(self, _now):
+            return [
+                Action("dry_run", "would BUY 37 @ ~940.12 on the close", "2026-08-26"),
+                Action("skipped", "kein Handelstag", "2026-08-26"),
+            ]
+
+    from micronalgo.config import load_settings
+
+    settings = load_settings(dry_run=True)
+    stop = threading.Event()
+    with caplog.at_level(logging.INFO):
+        run(Bot(settings), settings=settings, stop=stop, max_iterations=1,
+            sleeper=lambda _s: stop.set())
+
+    text = caplog.text
+    assert "would BUY 37" in text, "die Trockenlauf-Entscheidung fehlt auf der Konsole"
+    assert "kein Handelstag" in text, "die laute Aktion fehlt ebenfalls"
+    assert "dry_run" not in NOTIFY_KINDS, (
+        "dry_run gehoert nicht in den Push-Weg -- es soll sichtbar sein, nicht alarmieren"
+    )
+    assert text.count("would BUY 37") == 1, "genau eine Zeile pro Aktion, keine Doppelung"

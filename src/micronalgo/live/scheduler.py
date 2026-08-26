@@ -25,7 +25,10 @@ from .runner import OvernightBot
 
 log = get_logger("scheduler")
 
-ALERT_KINDS = {"alert", "halt", "skipped", "entry_submitted", "exit_submitted", "entry_filled"}
+# Welche Aktionen den Notifier durchlaufen (Webhook + alerts.log). Alles
+# Uebrige geht trotzdem auf die Konsole -- siehe die Schleife unten. Die
+# Trennung sagt, was Dich per Push erreichen soll, nicht was Du sehen darfst.
+NOTIFY_KINDS = {"alert", "halt", "skipped", "entry_submitted", "exit_submitted", "entry_filled"}
 
 
 def next_decision_times(bot: OvernightBot, now: dt.datetime) -> list[dt.datetime]:
@@ -120,9 +123,17 @@ def run(
             actions = []
 
         for action in actions:
-            if action.kind in ALERT_KINDS:
+            if action.kind in NOTIFY_KINDS:
                 level = "alert" if action.kind in {"alert", "halt"} else "info"
                 notifier.send(action.kind, f"{action.trade_date} {action.detail}", level=level)
+            else:
+                # Frueher fiel alles ausserhalb der Menge oben stumm zu Boden --
+                # 'dry_run' eingeschlossen. Im Trockenlauf IST diese Aktion das
+                # einzige Ergebnis: der Bot entschied, schrieb es ins Audit-Log
+                # und schwieg auf der Konsole, wo jemand danebensass und wartete.
+                # Genau ein Konsolenzeile pro Aktion, ohne Doppelung mit dem
+                # Notifier, der oben schon selbst loggt.
+                log.info("%s | %s %s", action.kind, action.trade_date, action.detail)
 
         if bot.state.halted:
             notifier.alert("HALTED", bot.state.halt_reason)

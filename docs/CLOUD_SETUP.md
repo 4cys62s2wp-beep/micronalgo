@@ -20,25 +20,78 @@ Der Bot laeuft durchgehend, schlaeft selbst bis zum naechsten
 Entscheidungszeitpunkt, nutzt die Websocket-Streams, und der Zustand liegt auf
 einem Volume. Das ist die Form, fuer die er gebaut ist.
 
-### Fly.io
+### Fly.io, Schritt fuer Schritt
 
 ```bash
+# 0. Einmalig: CLI installieren und anmelden
+brew install flyctl && fly auth login
+
+# 1. App anlegen, noch nicht deployen
+cd ~/micronalgo
 fly launch --no-deploy --copy-config --dockerfile deploy/Dockerfile
-fly volumes create micronalgo_data --size 1
-fly secrets set ALPACA_API_KEY_ID=xxx ALPACA_API_SECRET_KEY=yyy
+
+# 2. Volume fuer den Zustand (1 GB reicht auf Jahre)
+fly volumes create micronalgo_data --size 1 --region ewr
+
+# 3. Schluessel als Secrets -- NICHT ins Image, nicht in fly.toml
+fly secrets set ALPACA_API_KEY_ID=PK... ALPACA_API_SECRET_KEY=...
+
+# 4. Deployen
 fly deploy
+
+# 5. Nachsehen, dass genau EINE Maschine laeuft
+fly status
+fly logs
 ```
 
-Danach vom Handy aus steuerbar:
+Bei Schritt 1 schlaegt `fly launch` womoeglich einen anderen App-Namen vor,
+weil `micronalgo` global schon vergeben ist. Das ist normal; nimm den
+Vorschlag an.
+
+Bei Schritt 2 muss die Region dieselbe sein wie `primary_region` in
+`fly.toml` (`ewr`, Newark), sonst findet die Maschine ihr Volume nicht.
+
+**Warum genau eine Maschine:** Zwei Instanzen wuerden sich um dieselbe
+Position streiten. Der Instanz-Lock im Code schuetzt nur *innerhalb* einer
+Maschine. Was es hier verhindert, ist das Volume -- ein Fly-Volume haengt immer
+nur an einer Maschine. Deshalb: `fly status` muss genau eine Zeile zeigen, und
+`fly scale count 2` waere der eine Befehl, den Du nie eingeben darfst.
+
+**Kosten:** eine `shared-cpu-1x`-Maschine mit 512 MB und 1 GB Volume liegt bei
+ungefaehr 2-5 $ im Monat. Fly verlangt inzwischen eine hinterlegte Karte.
+
+### Steuerung, auch vom Handy
 
 ```bash
-fly logs                              # was er gerade tut
+fly logs                                   # was er gerade tut
 fly secrets set MICRONALGO_DRY_RUN=false   # echte Paper-Orders scharfschalten
-fly scale count 0                     # Not-Aus: Maschine anhalten
+fly ssh console -C "micronalgo status"     # was er glaubt
+fly ssh console -C "micronalgo kill"       # Not-Aus, Position bleibt
+fly scale count 0                          # haerterer Not-Aus: Maschine aus
 ```
 
 Die `fly`-Befehle brauchen einmalig einen Rechner **oder** die Web-Konsole auf
 fly.io, die im Handy-Browser funktioniert. Danach reicht die Weboberflaeche.
+
+### Ein Halt verhaelt sich hier anders als auf dem Mac
+
+Auf dem Mac bleibt ein gehaltener Bot unten, weil launchd einen Exit-Code 0
+nicht neu startet. Ein Container-Host entscheidet das nach seiner eigenen
+Restart-Policy: steht sie auf `always`, startet der Container nach dem Halt neu,
+der Start-Guard erkennt den gespeicherten Halt und beendet sich sofort wieder --
+in einer Schleife.
+
+**Gehandelt wird dabei nicht.** Der Guard laeuft vor jeder Handelslogik, ein
+gehaltener Bot gibt keine Order ab. Was Du bekommst, ist Lograuschen, kein
+Risiko. Sichtbar wird es als wiederkehrende `halted`-Zeile in `fly logs`; die
+Behandlung ist dieselbe wie ueberall:
+
+```bash
+fly ssh console -C "micronalgo resume --clear-halt"
+```
+
+Vorher aber nachsehen, **warum** er gehalten hat -- ein Halt ist das Ergebnis
+einer Risiko-Wache, nicht eines Fehlers.
 
 ### Railway / Render / eigener Server
 

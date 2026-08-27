@@ -1,0 +1,28 @@
+# Schuetzt den Build-Kontext. Das Dockerfile kopiert heute gezielt nur
+# pyproject.toml, README.md und src/ -- aber ein spaeteres `COPY . .` wuerde
+# ohne diese Datei .env mitsamt den Alpaca-Schluesseln ins Image backen, wo sie
+# jeder mit `docker history` wieder herausholt. Die Regel steht hier, damit
+# dieser Fehler gar nicht erst moeglich wird.
+.env
+.env.*
+!.env.example
+
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# Laufzeitdaten gehoeren aufs Volume, nicht ins Image.
+data/
+logs/
+state/
+reports/
+runtime/
+
+.git/
+.github/
+docs/
+pine/
+tests/

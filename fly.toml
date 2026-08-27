@@ -2,11 +2,12 @@
 #
 # Deployment ohne Mac:
 #   1. fly.io Konto anlegen (geht im Handy-Browser)
-#   2. Repo verbinden oder `fly launch --no-deploy` von irgendeinem Rechner
-#   3. Schluessel setzen:
-#        fly secrets set ALPACA_API_KEY_ID=... ALPACA_API_SECRET_KEY=...
-#   4. fly volumes create micronalgo_data --size 1
-#   5. fly deploy
+#   2. Zahlungsmittel hinterlegen (fly.io -> Dashboard -> Billing). Ohne das
+#      lehnt Fly Volumes und Maschinen ab.
+#   3. fly launch --no-deploy --copy-config --name DEIN-NAME --region ewr
+#   4. fly volumes create micronalgo_data --size 1 --region ewr
+#   5. fly secrets set ALPACA_API_KEY_ID=... ALPACA_API_SECRET_KEY=...
+#   6. fly deploy
 #
 # Siehe docs/CLOUD_SETUP.md fuer den kompletten Ablauf inklusive der
 # Handy-tauglichen Variante.
@@ -18,7 +19,13 @@ app = "micronalgo"
 primary_region = "ewr"   # Newark: nah an den US-Boersen, spart Latenz
 
 [build]
-  dockerfile = "Dockerfile"
+  # Pfade sind relativ zum Projektstamm, wo diese Datei liegen MUSS: flyctl
+  # sucht fly.toml im Arbeitsverzeichnis. Lag sie unter deploy/, scheiterte
+  # `fly launch --copy-config` mit "missing an app name", weil es gar keine
+  # Konfiguration fand. Der Build-Kontext ist ebenfalls der Stamm -- das
+  # Dockerfile kopiert pyproject.toml und src/, die es unter deploy/ nicht
+  # gaebe.
+  dockerfile = "deploy/Dockerfile"
 
 [env]
   MICRONALGO_BROKER = "alpaca"

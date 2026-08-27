@@ -22,34 +22,55 @@ einem Volume. Das ist die Form, fuer die er gebaut ist.
 
 ### Fly.io, Schritt fuer Schritt
 
+**In zsh kein `#` mitkopieren.** Anders als in bash ist `#` in einer
+interaktiven zsh kein Kommentarzeichen; eine eingefuegte Kommentarzeile
+antwortet mit `command not found: #`. Die Befehle unten stehen deshalb
+kommentarlos, die Erklaerung daneben.
+
+Einmalig, CLI installieren und anmelden:
+
 ```bash
-# 0. Einmalig: CLI installieren und anmelden
-brew install flyctl && fly auth login
+brew install flyctl
+fly auth login
+```
 
-# 1. App anlegen, noch nicht deployen
+**Zahlungsmittel hinterlegen**, unter fly.io -> Dashboard -> Billing. Ohne das
+meldet Fly `This organization has no payment method` und lehnt Volumes und
+Maschinen ab. Es kostet nichts extra, aber ohne Karte geht es nicht.
+
+App anlegen. `DEIN-NAME` durch etwas Freies ersetzen -- App-Namen sind bei Fly
+global eindeutig, `micronalgo` ist vergeben:
+
+```bash
 cd ~/micronalgo
-fly launch --no-deploy --copy-config --dockerfile deploy/Dockerfile
+fly launch --no-deploy --copy-config --name DEIN-NAME --region ewr
+```
 
-# 2. Volume fuer den Zustand (1 GB reicht auf Jahre)
+`--copy-config` liest `fly.toml` **aus dem Projektstamm**. Genau dort muss sie
+liegen; lag sie unter `deploy/`, scheitert der Befehl mit
+`missing an app name`, weil er gar keine Konfiguration findet.
+
+Volume fuer den Zustand, 1 GB reicht auf Jahre. Die Region muss dieselbe sein
+wie `primary_region` in `fly.toml`, sonst findet die Maschine ihr Volume nicht:
+
+```bash
 fly volumes create micronalgo_data --size 1 --region ewr
+```
 
-# 3. Schluessel als Secrets -- NICHT ins Image, nicht in fly.toml
+Schluessel als Secrets. Die landen verschluesselt bei Fly, nicht im Image und
+nicht in `fly.toml`:
+
+```bash
 fly secrets set ALPACA_API_KEY_ID=PK... ALPACA_API_SECRET_KEY=...
+```
 
-# 4. Deployen
+Deployen und nachsehen, dass genau EINE Maschine laeuft:
+
+```bash
 fly deploy
-
-# 5. Nachsehen, dass genau EINE Maschine laeuft
 fly status
 fly logs
 ```
-
-Bei Schritt 1 schlaegt `fly launch` womoeglich einen anderen App-Namen vor,
-weil `micronalgo` global schon vergeben ist. Das ist normal; nimm den
-Vorschlag an.
-
-Bei Schritt 2 muss die Region dieselbe sein wie `primary_region` in
-`fly.toml` (`ewr`, Newark), sonst findet die Maschine ihr Volume nicht.
 
 **Warum genau eine Maschine:** Zwei Instanzen wuerden sich um dieselbe
 Position streiten. Der Instanz-Lock im Code schuetzt nur *innerhalb* einer

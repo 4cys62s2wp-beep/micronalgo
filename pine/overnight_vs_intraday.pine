@@ -1,0 +1,151 @@
+//@version=6
+// =============================================================================
+//  Overnight vs Intraday decomposition             micronalgo / TradingView v6
+// -----------------------------------------------------------------------------
+//  Splits every session's return into the two disjoint windows that compose it:
+//
+//      overnight  r_on = open  / close[1] - 1   (held while the market is shut)
+//      intraday   r_id = close / open      - 1   (held while it is open)
+//      full day   r_cc = close / close[1] - 1   (what buy & hold earns)
+//
+//      (1 + r_cc) == (1 + r_on) * (1 + r_id)     exactly -- `open` cancels
+//
+//  WHY AN INDICATOR RATHER THAN A STRATEGY
+//  TradingView's strategy tester cannot express "fill at the official closing
+//  auction AND at the official opening auction" on a daily chart. With
+//  process_orders_on_close = true a market order fills at that bar's close; with
+//  it false it fills at the next bar's open. This strategy needs one of each, so
+//  no single setting produces the right pair of fills. An indicator computes the
+//  arithmetic directly and is therefore EXACT: no fill assumptions at all.
+//  Use it as the visual proof, and as an independent check on the Python
+//  backtest in this repository -- the two must agree.
+//
+//  HOW TO USE
+//   1. Open MU on a DAILY chart.
+//   2. Turn "Extended trading hours" OFF. With it on, `open` becomes the 04:00
+//      pre-market print instead of the 09:30 auction and the whole study breaks.
+//   3. Add this indicator. Set the round-trip cost to what you actually expect
+//      to pay -- 0.3 bps for commission-free auction execution at retail size.
+// =============================================================================
+
+indicator("Overnight vs Intraday", shorttitle="ON/ID", overlay=false, precision=2)
+
+// ------------------------------------------------------------------ inputs ---
+startDate = input.time(timestamp("01 Jan 1994 00:00 +0000"), "Start from",  group="Setup")
+useLog    = input.bool(true, "Plot natural log of equity",   group="Setup",
+     tooltip="Once a curve spans several orders of magnitude a linear axis makes a 2x and a 200x look alike.")
+showCC    = input.bool(true, "Show buy & hold",               group="Setup")
+costBps   = input.float(0.3, "Round-trip cost (bps)", minval=0.0, maxval=1000.0, step=0.1, group="Costs",
+     tooltip="0.3 bps = commission-free auction execution at retail size (SEC + FINRA fees only). " +
+             "Set it to 10 to see what crossing a spread does to 252 round trips a year. " +
+             "It is applied to the overnight and intraday curves, which trade daily, but not to " +
+             "buy & hold, which does not.")
+showTable = input.bool(true, "Show statistics table",         group="Statistics")
+
+// ------------------------------------------------------------------ guards ---
+// Both of these produce plausible-looking but meaningless numbers rather than an
+// obvious failure, so they stop the script instead of warning quietly.
+if barstate.isfirst
+    if syminfo.session != session.regular
+        runtime.error("Extended trading hours are ON. `open` then refers to the 04:00 " +
+             "pre-market print instead of the 09:30 auction, which is not the quantity this " +
+             "study is about. Chart settings -> Symbol -> uncheck Extended trading hours.")
+    if not chart.is_standard
+        runtime.error("This needs a standard chart type. Heikin Ashi, Renko, Kagi, Point & " +
+             "Figure, Range and Line Break all synthesise their own open and close, so the " +
+             "decomposition would describe the chart rather than the stock.")
+
+// ----------------------------------------------------------------- returns ---
+inRange = time >= startDate
+hasPrev = not na(close[1]) and close[1] > 0 and not na(open) and open > 0
+
+r_on = hasPrev ? open  / close[1] - 1.0 : 0.0
+r_id = hasPrev ? close / open      - 1.0 : 0.0
+r_cc = hasPrev ? close / close[1]  - 1.0 : 0.0
+
+cost = costBps / 10000.0
+
+// ------------------------------------------------------------------ state ----
+// Pine rolls `var` state back on every realtime tick, so these compound exactly
+// once per confirmed bar. The curves do not repaint.
+var float eqOn    = 1.0
+var float eqId    = 1.0
+var float eqCc    = 1.0
+var int   nBars   = 0
+var float sumOn   = 0.0
+var float sumSqOn = 0.0
+var int   nWinOn  = 0
+var float worstOn = 0.0
+var float peakOn  = 1.0
+var float maxDdOn = 0.0
+
+if inRange and hasPrev
+    nBars   := nBars + 1
+    eqOn    := eqOn * (1.0 + r_on) * (1.0 - cost)
+    eqId    := eqId * (1.0 + r_id) * (1.0 - cost)
+    eqCc    := eqCc * (1.0 + r_cc)
+    sumOn   := sumOn + r_on
+    sumSqOn := sumSqOn + r_on * r_on
+    nWinOn  := nWinOn + (r_on > 0 ? 1 : 0)
+    worstOn := nBars == 1 ? r_on : math.min(worstOn, r_on)
+    peakOn  := math.max(peakOn, eqOn)
+    maxDdOn := math.min(maxDdOn, eqOn / peakOn - 1.0)
+
+plotOn = useLog ? math.log(math.max(eqOn, 1e-12)) : eqOn
+plotId = useLog ? math.log(math.max(eqId, 1e-12)) : eqId
+plotCc = useLog ? math.log(math.max(eqCc, 1e-12)) : eqCc
+
+plot(plotOn, "Overnight (close to open)", color=color.new(#1f77b4, 0), linewidth=2)
+plot(plotId, "Intraday (open to close)",  color=color.new(#d62728, 0), linewidth=2)
+plot(showCC ? plotCc : na, "Buy and hold", color=color.new(#808080, 30), linewidth=1)
+// A plot rather than hline(): hline() wants a const price, and `useLog ? 0.0 : 1.0`
+// is not one.
+plot(useLog ? 0.0 : 1.0, "break even", color=color.new(color.gray, 50), linewidth=1,
+     style=plot.style_line)
+
+// ------------------------------------------------------------------ table ----
+var table stats = table.new(position.top_right, 2, 11, border_width=1,
+     frame_color=color.new(color.gray, 60), frame_width=1)
+
+if showTable and barstate.islast and nBars > 1
+    years  = nBars / 252.0
+    meanOn = sumOn / nBars
+    varOn  = math.max((sumSqOn - nBars * meanOn * meanOn) / (nBars - 1), 0.0)
+    sdOn   = math.sqrt(varOn)
+    sharpe = sdOn > 0.0 ? meanOn / sdOn * math.sqrt(252.0) : 0.0
+    cagrOn = eqOn > 0.0 and years > 0.0 ? math.pow(eqOn, 1.0 / years) - 1.0 : 0.0
+    // nWinOn and nBars are both `int`, and Pine's `/` on two ints is INTEGER
+    // division -- this read 0 % on every chart until the float cast was added.
+    hit    = nWinOn / float(nBars)
+    // Break-even round-trip cost, computed GEOMETRICALLY: c* = 1 - exp(-E[log(1+r)]).
+    // The arithmetic mean overstates it by about sigma^2/2 every single session,
+    // which for a 2 %/session sigma is ~2 bps -- often the size of the entire edge.
+    // `geoOn` uses the mu - sigma^2/2 approximation because Pine cannot keep a
+    // running mean of logs cheaply; it lands within ~0.5 % of the exact figure the
+    // Python report prints, which is verified in tests/test_pine_parity.py.
+    geoOn  = meanOn - 0.5 * varOn
+    beBps  = (1.0 - math.exp(-geoOn)) * 10000.0
+    tfOk   = timeframe.isdaily
+
+    table.cell(stats, 0, 0, "sessions",            text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 0, str.tostring(nBars),   text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 1, "overnight total",     text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 1, str.tostring((eqOn - 1.0) * 100.0, "#,###.#") + "%", text_color=#1f77b4, text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 2, "intraday total",      text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 2, str.tostring((eqId - 1.0) * 100.0, "#,###.#") + "%", text_color=#d62728, text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 3, "buy and hold total",  text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 3, str.tostring((eqCc - 1.0) * 100.0, "#,###.#") + "%", text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 4, "overnight CAGR",      text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 4, str.tostring(cagrOn * 100.0, "#.##") + "%", text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 5, "overnight Sharpe",    text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 5, str.tostring(sharpe, "#.##"), text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 6, "overnight max DD",    text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 6, str.tostring(maxDdOn * 100.0, "#.#") + "%", text_color=#d62728, text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 7, "hit rate",            text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 7, str.tostring(hit * 100.0, "#.#") + "%", text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 8, "mean per session",    text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 8, str.tostring(meanOn * 10000.0, "#.##") + " bps", text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 9, "break-even cost / RT", text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 9, str.tostring(beBps, "#.##") + " bps", text_color=color.orange, text_size=size.small, text_halign=text.align_right)
+    table.cell(stats, 0, 10, tfOk ? "timeframe" : "WRONG TIMEFRAME", text_size=size.small, text_halign=text.align_left)
+    table.cell(stats, 1, 10, tfOk ? "daily" : "use daily", text_color=tfOk ? color.green : color.red, text_size=size.small, text_halign=text.align_right)

@@ -1,0 +1,171 @@
+# Die Untersuchung auf Knopfdruck -- fuer den Fall, dass kein Mac da ist.
+#
+# WOZU DAS DA IST
+# `micronalgo study` braucht Kursdaten aus dem Netz. Genau das ist der Teil,
+# den ein Handy nicht kann. Ein GitHub-Runner kann es. Also laeuft die
+# Untersuchung hier, und das Ergebnis steht danach in der Zusammenfassung des
+# Laufs -- lesbar in der GitHub-App, ohne Terminal, ohne Rechner.
+#
+# So startest Du sie am Handy:
+#   Repository -> Actions -> "Untersuchung" -> "Run workflow".
+# Die Vorgaben sind bereits die richtigen; Du kannst sie einfach bestaetigen.
+
+name: Untersuchung
+
+on:
+  workflow_dispatch:
+    inputs:
+      kommando:
+        description: "Was gerechnet werden soll"
+        type: choice
+        default: study
+        options: [study, walkforward]
+      start:
+        description: "Beginn (YYYY-MM-DD). 2007-01-01 ist die handelbare Ära; leer = ganze Historie ab 1984."
+        default: "2007-01-01"
+      end:
+        description: "Ende (YYYY-MM-DD), leer = bis heute"
+        default: ""
+      resamples:
+        description: "Bootstrap-Ziehungen (nur study). Mehr = genauer und langsamer."
+        default: "2000"
+      variants:
+        description: "Wie viele Konfigurationen Du insgesamt angesehen hast (nur study, fliesst in den deflated Sharpe)"
+        default: "1"
+      score:
+        description: "Auswahlkriterium (nur walkforward)"
+        type: choice
+        default: calmar
+        options: [calmar, geometric_mean]
+
+# Zwei Untersuchungen gleichzeitig waeren nur Verschwendung, aber eine
+# laufende abzubrechen ist aergerlich, wenn sie fast fertig ist.
+concurrency:
+  group: micronalgo-study-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  rechnen:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    env:
+      # Eingaben ueber die Umgebung, nicht direkt in die Kommandozeile
+      # interpoliert: sonst waere der Eingabetext Teil des Shell-Befehls.
+      KOMMANDO:  ${{ inputs.kommando }}
+      START:     ${{ inputs.start }}
+      END:       ${{ inputs.end }}
+      RESAMPLES: ${{ inputs.resamples }}
+      VARIANTS:  ${{ inputs.variants }}
+      SCORE:     ${{ inputs.score }}
+      MICRONALGO_CACHE_DIR: runtime/cache
+      MICRONALGO_LOG_DIR: runtime/logs
+      # Falls Du einen Tiingo-Schluessel hinterlegt hast, wird er benutzt.
+      # Ohne ihn laeuft es ueber die offenen Quellen (stooq, yahoo).
+      TIINGO_API_KEY: ${{ secrets.TIINGO_API_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: micronalgo installieren
+        run: pip install --quiet -e ".[all]"
+
+      - name: Rechnen
+        id: run
+        run: |
+          set -u
+          mkdir -p runtime/cache runtime/logs berichte
+          # Datumsangaben pruefen, bevor sie in die Kommandozeile wandern. Ein
+          # Tippfehler soll hier scheitern, mit einem Satz, der ihn benennt --
+          # nicht spaeter in einer argparse-Meldung, und schon gar nicht als
+          # zusaetzliches Argument.
+          pruefe_datum() {   # $1 = Feldname fuer die Meldung, $2 = Wert
+            case "$2" in
+              "") ;;
+              [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+              *) echo "::error::$1 muss JJJJ-MM-TT sein oder leer, war: $2"
+                 exit 1 ;;
+            esac
+          }
+          pruefe_datum Beginn "$START"
+          pruefe_datum Ende   "$END"
+          args=""
+          [ -n "$START" ] && args="$args --start $START"
+          [ -n "$END" ]   && args="$args --end $END"
+          if [ "$KOMMANDO" = "study" ]; then
+            args="$args --resamples $RESAMPLES --variants $VARIANTS --out berichte"
+          else
+            args="$args --score $SCORE"
+          fi
+          echo "micronalgo $KOMMANDO$args"
+          set +e
+          # shellcheck disable=SC2086
+          micronalgo "$KOMMANDO" $args 2>ausgabe.err | tee ausgabe.txt
+          code=${PIPESTATUS[0]}
+          set -e
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "Exit-Code: $code"
+        shell: bash
+
+      - name: Ergebnis in die Zusammenfassung schreiben
+        if: always()
+        shell: bash
+        run: |
+          set -u
+          code="${{ steps.run.outputs.code }}"
+          case "$code" in
+            0) kopf="Durchgelaufen. Urteil: PASS oder WARN -- Einzelheiten unten." ;;
+            2) kopf="Durchgelaufen. Urteil: **FAIL** -- mindestens eine Pruefung ist durchgefallen. Das ist ein Ergebnis, kein Programmfehler: unten steht, welche." ;;
+            "") kopf="Der Lauf wurde abgebrochen, bevor gerechnet wurde." ;;
+            *) kopf="**Abgebrochen mit Fehler** (Code $code). Das ist kein Urteil ueber die Strategie, sondern ein Problem beim Lauf selbst -- meist die Datenquelle." ;;
+          esac
+          {
+            echo "## $KOMMANDO"
+            echo ""
+            echo "$kopf"
+            echo ""
+            echo '```'
+            # Die Zusammenfassung ist auf 1 MB begrenzt; der Bericht ist
+            # normalerweise weit darunter, aber abschneiden ist besser als
+            # eine leere Seite.
+            head -c 700000 ausgabe.txt 2>/dev/null || echo "(keine Ausgabe)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Meldungen und Herkunft der Daten</summary>"
+            echo ""
+            echo '```'
+            tail -c 20000 ausgabe.err 2>/dev/null || echo "(keine)"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Bericht zum Herunterladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: micronalgo-bericht
+          path: |
+            berichte/
+            ausgabe.txt
+            ausgabe.err
+          if-no-files-found: warn
+          retention-days: 30
+
+      - name: Lauf nur bei echtem Fehler rot faerben
+        # Ein FAIL-Urteil ist ein Befund, kein Defekt. Am Handy sieht ein rotes
+        # X aber aus wie "die Software ist kaputt" -- deshalb bleibt der Lauf
+        # bei Code 2 gruen, und das Urteil steht im Klartext oben.
+        if: always()
+        shell: bash
+        run: |
+          code="${{ steps.run.outputs.code }}"
+          if [ "$code" != "0" ] && [ "$code" != "2" ]; then
+            echo "::error::Die Untersuchung ist mit Code $code abgebrochen."
+            exit 1
+          fi

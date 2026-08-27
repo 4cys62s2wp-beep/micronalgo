@@ -1,0 +1,61 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "micronalgo"
+version = "1.0.0"
+description = "Research and fully-automated paper-trading system for the Micron (MU) overnight vs. intraday return anomaly."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "pandas>=2.0",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "requests>=2.31",
+    "pydantic>=2.5",
+    "pydantic-settings>=2.1",
+    "python-dateutil>=2.8",
+]
+
+[project.optional-dependencies]
+research = ["matplotlib>=3.7", "pyarrow>=14", "tabulate>=0.9"]
+live = ["apscheduler>=3.10", "exchange_calendars>=4.5", "websocket-client>=1.7"]
+dev = ["pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4", "pyyaml>=6.0"]
+all = [
+    "matplotlib>=3.7", "pyarrow>=14", "tabulate>=0.9",
+    "apscheduler>=3.10", "exchange_calendars>=4.5", "websocket-client>=1.7",
+    "pytest>=7.4", "pytest-cov>=4.1", "ruff>=0.4", "pyyaml>=6.0",
+]
+
+[project.scripts]
+micronalgo = "micronalgo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+micronalgo = ["py.typed", "resources/*.csv"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+markers = ["network: requires outbound network access (skipped by default)"]
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "C4", "SIM"]
+ignore = [
+    "E501",   # line length is handled by `line-length` above
+    "B008",   # function calls in argument defaults (pydantic Field, dataclass factory)
+    "SIM105", # contextlib.suppress hides which exception is being tolerated and why;
+              # in this codebase every bare try/except/pass sits next to a comment
+              # explaining the degradation, and that reads better than a context manager
+    "SIM102", # nested ifs are kept where each condition carries its own comment
+    "SIM108", # a ternary is not clearer than an if/else in the bootstrap inner loop
+]

@@ -1,0 +1,213 @@
+# micronalgo im Cron-Betrieb auf GitHub Actions.
+#
+# DER HANDY-WEG: komplett ohne Terminal und ohne Mac einzurichten. Schluessel
+# kommen in Settings -> Secrets and variables -> Actions (im Handy-Browser
+# machbar), danach laeuft das hier von selbst.
+#
+# EHRLICHE EINORDNUNG, BITTE LESEN
+# GitHub-Cron ist NICHT puenktlich: GitHub sagt selbst, dass Laeufe bei hoher
+# Last um 10+ Minuten verspaetet starten koennen. Ein 5-Minuten-Auktionsfenster
+# waere damit unzuverlaessig. Deshalb ist hier das Einstiegsfenster auf
+# close-40 bis close-10 verbreitert (30 Minuten), und der Cron laeuft alle 10
+# Minuten -- eine Verspaetung von 20 Minuten wird noch aufgefangen. Der Preis
+# dafuer: die Order wird frueher eingereicht, mit einem etwas aelteren
+# Referenzpreis fuer die Stueckzahl. Bei Privatanlegergroesse ist das
+# belanglos (capital_fraction laesst 5 % Luft), aber es ist ein Unterschied
+# zum Dauerbetrieb.
+#
+# Wenn es ernsthaft laufen soll, ist der Container die bessere Form:
+# siehe deploy/Dockerfile und docs/CLOUD_SETUP.md.
+
+name: paper trading
+
+on:
+  schedule:
+    # Zeiten in UTC. Die Boerse rechnet in America/New_York, das je nach
+    # Sommer-/Winterzeit UTC-4 oder UTC-5 ist -- die Fenster unten decken
+    # BEIDE Faelle ab. Welche Sitzungszeiten wirklich gelten, entscheidet
+    # ohnehin der Kalender im Programm, nicht dieser Ausdruck.
+    - cron: "*/10 12-14 * * 1-5"   # Ausstiegsfenster + Kontrolle nach Eroeffnung
+    - cron: "*/10 19-21 * * 1-5"   # Einstiegsfenster + Kontrolle nach Schluss
+  workflow_dispatch:                # Knopf zum Sofortstart, auch in der GitHub-App
+    inputs:
+      probe_orders:
+        description: "Auktionsorders wirklich testen (1 Aktie einreichen und sofort stornieren). Nur zwischen 01:00 und 15:28 deutscher Zeit sinnvoll -- ausserhalb nimmt die Eroeffnungsauktion nichts an."
+        type: boolean
+        default: false
+
+# Zwei gleichzeitige Laeufe wuerden sich um dieselbe Position streiten. Der
+# Instanz-Lock im Code schuetzt nur innerhalb einer Maschine, also hier hart
+# serialisieren. Laufende Laeufe NICHT abbrechen: ein halb erledigter Tick
+# waere schlimmer als ein verspaeteter.
+concurrency:
+  group: micronalgo-paper
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write            # nur, um den Zustand zurueckzuschreiben
+
+    env:
+      ALPACA_API_KEY_ID: ${{ secrets.ALPACA_API_KEY_ID }}
+      ALPACA_API_SECRET_KEY: ${{ secrets.ALPACA_API_SECRET_KEY }}
+      MICRONALGO_BROKER: alpaca
+      # Als Variable, nicht fest verdrahtet: Alpaca Europe und die US-Beta
+      # haben andere Hostnamen. Wer einen anderen Papier-Endpunkt hat, setzt
+      # ihn in Settings -> Variables und dazu MICRONALGO_ALPACA_PAPER=true,
+      # damit die Sicherung ihn als Papierkonto akzeptiert.
+      MICRONALGO_ALPACA_BASE_URL: ${{ vars.MICRONALGO_ALPACA_BASE_URL || 'https://paper-api.alpaca.markets' }}
+      MICRONALGO_ALPACA_PAPER: ${{ vars.MICRONALGO_ALPACA_PAPER || 'true' }}
+      MICRONALGO_SYMBOL: MU
+      MICRONALGO_STATE_DIR: runtime/state
+      MICRONALGO_LOG_DIR: runtime/logs
+      MICRONALGO_CACHE_DIR: runtime/cache
+      MICRONALGO_KILL_SWITCH_FILE: runtime/state/KILL
+      # Verbreitertes Einstiegsfenster, siehe Kommentar oben.
+      MICRONALGO_ENTRY_SUBMIT_OFFSET_MIN: "40"
+      MICRONALGO_ENTRY_CUTOFF_OFFSET_MIN: "10"
+      # Anteil des Kapitals pro Position. 0.35 ist das Ergebnis der
+      # Groessentabelle im Report: der groesste Anteil, der den historischen
+      # Rueckgang noch innerhalb von -30 % haelt.
+      MICRONALGO_CAPITAL_FRACTION: ${{ vars.MICRONALGO_CAPITAL_FRACTION || '0.35' }}
+      # Trockenlauf, bis Du in den Repository-Variablen DRY_RUN=false setzt.
+      # Bewusst eine Variable und kein Default im Code: das Umschalten auf
+      # echte Paper-Orders soll eine sichtbare Handlung sein.
+      MICRONALGO_DRY_RUN: ${{ vars.MICRONALGO_DRY_RUN || 'true' }}
+
+    steps:
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Schluessel pruefen
+        # Ohne diesen Schritt scheitert erst der Preflight, mit einer Meldung
+        # ueber HTTP 403 -- was wie ein Netzproblem aussieht, aber "Secret
+        # fehlt" heisst. Am Handy ist eine klare Zeile mehr wert als ein
+        # Stacktrace.
+        run: |
+          set -eu
+          missing=""
+          [ -n "${ALPACA_API_KEY_ID:-}" ]     || missing="$missing ALPACA_API_KEY_ID"
+          [ -n "${ALPACA_API_SECRET_KEY:-}" ] || missing="$missing ALPACA_API_SECRET_KEY"
+          if [ -n "$missing" ]; then
+            echo "::error::Es fehlen Repository-Secrets:$missing"
+            {
+              echo "### Schluessel fehlen"
+              echo ""
+              echo "Diese Secrets sind nicht gesetzt:**$missing**"
+              echo ""
+              echo "So setzt Du sie am Handy: Repository -> Settings ->"
+              echo "Secrets and variables -> Actions -> New repository secret."
+              echo "Die Werte stehen im Alpaca-Dashboard unter API Keys."
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+          echo "Beide Schluessel sind gesetzt."
+
+      - name: Zustand aus dem bot-state-Branch holen
+        # Der Zustand lebt in einem eigenen Branch, damit Code-Historie und
+        # Bot-Historie sich nie in die Quere kommen. Fehlt der Branch (erster
+        # Lauf), startet der Bot leer -- die Reconciliation gleicht dann gegen
+        # den Broker ab, der ohnehin die Wahrheit ist.
+        #
+        # Die Pfade hier muessen exakt denen im Rueckschreib-Schritt
+        # entsprechen. Sie taten es einmal nicht ("state logs" gegen
+        # "runtime/state runtime/logs"), und weil der Fehler mit 2>/dev/null
+        # verschluckt wurde, meldete der Lauf trotzdem Erfolg und startete
+        # jedes Mal mit leerem Zustand. Deshalb wird unten gezaehlt statt
+        # behauptet.
+        #
+        # Der Rueckschreib-Schritt macht einen force-push. Waere das Holen
+        # stillschweigend fehlgeschlagen -- ein Netzhaenger genuegt --, wuerde
+        # er den gespeicherten Zustand mit einem leeren ueberschreiben. Deshalb
+        # wird hier zuerst gefragt, OB es den Branch ueberhaupt gibt, und nur im
+        # Erfolgsfall STATE_OK gesetzt. Bricht das Holen ab, bleibt STATE_OK
+        # leer, und der force-push unterbleibt.
+        run: |
+          set -eu
+          mkdir -p runtime/state runtime/logs runtime/cache
+          if git ls-remote --exit-code --heads origin bot-state >/dev/null 2>&1; then
+            git fetch -q origin bot-state
+            git checkout FETCH_HEAD -- runtime/state runtime/logs 2>/dev/null || true
+            git reset -q
+            n=$(find runtime/state -type f 2>/dev/null | wc -l | tr -d ' ')
+            echo "Zustand aus bot-state: $n Datei(en)."
+            echo "STATE_OK=vorhanden" >> "$GITHUB_ENV"
+          else
+            echo "Kein bot-state-Branch, erster Lauf."
+            echo "STATE_OK=erstlauf" >> "$GITHUB_ENV"
+          fi
+
+      - name: Python einrichten
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: micronalgo installieren
+        run: pip install --quiet -e ".[all]"
+
+      - name: Preflight
+        # Faellt der Preflight durch, wird NICHT gehandelt. Lieber eine
+        # ausgelassene Sitzung als eine Order auf Basis einer kaputten Annahme.
+        #
+        # --probe-orders reicht eine echte Auktionsorder ueber 1 Aktie ein und
+        # storniert sie sofort. Das ist der EINZIGE Weg, die Annahme zu pruefen,
+        # auf der alles ruht -- aber im Zehnminutentakt waere es Unfug, deshalb
+        # nur auf ausdruecklichen Knopfdruck.
+        run: |
+          set -eu
+          if [ "${{ inputs.probe_orders }}" = "true" ]; then
+            micronalgo preflight --probe-orders
+          else
+            micronalgo preflight
+          fi
+
+      - name: Tick
+        id: tick
+        run: micronalgo tick --no-stream
+
+      - name: Zustand zurueckschreiben
+        if: always()
+        run: |
+          set -eu
+          if [ -z "${STATE_OK:-}" ]; then
+            echo "::warning::Der Zustand konnte nicht geholt werden. Es wird" \
+                 "NICHTS zurueckgeschrieben -- ein force-push wuerde den" \
+                 "gespeicherten Zustand jetzt mit einem leeren ueberschreiben."
+            exit 0
+          fi
+          git config user.name  "micronalgo-bot"
+          git config user.email "noreply@anthropic.com"
+          git checkout -B bot-state
+          # Nur der Laufzeitzustand gehoert in diesen Branch, kein Code.
+          git rm -r --cached . -q
+          git add -f runtime/state runtime/logs 2>/dev/null || true
+          if git diff --cached --quiet; then
+            echo "Zustand unveraendert, kein Commit."
+          else
+            git commit -q -m "state $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+            git push -f origin bot-state
+            echo "Zustand gesichert."
+          fi
+
+      - name: Zusammenfassung
+        if: always()
+        run: |
+          {
+            echo "### micronalgo tick"
+            echo ""
+            echo '```'
+            micronalgo status 2>/dev/null || echo "(kein Status)"
+            echo '```'
+            echo ""
+            echo "<details><summary>Letzte Logzeilen</summary>"
+            echo ""
+            echo '```'
+            tail -20 runtime/logs/micronalgo.log 2>/dev/null || echo "(kein Log)"
+            echo '```'
+            echo ""
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"

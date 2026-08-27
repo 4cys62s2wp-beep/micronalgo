@@ -1,0 +1,65 @@
+# Fly.io-Konfiguration fuer micronalgo.
+#
+# Deployment ohne Mac:
+#   1. fly.io Konto anlegen (geht im Handy-Browser)
+#   2. Zahlungsmittel hinterlegen (fly.io -> Dashboard -> Billing). Ohne das
+#      lehnt Fly Volumes und Maschinen ab.
+#   3. fly launch --no-deploy --copy-config --name DEIN-NAME --region ewr
+#   4. fly volumes create micronalgo_data --size 1 --region ewr
+#   5. fly secrets set ALPACA_API_KEY_ID=... ALPACA_API_SECRET_KEY=...
+#   6. fly deploy
+#
+# Siehe docs/CLOUD_SETUP.md fuer den kompletten Ablauf inklusive der
+# Handy-tauglichen Variante.
+
+# App-Namen sind bei Fly global eindeutig. "micronalgo" ist womoeglich schon
+# vergeben -- `fly launch` schlaegt dann einen freien Namen vor und schreibt ihn
+# hier hinein. Das ist kein Fehler, sondern der Normalfall.
+app = "micronalgo"
+primary_region = "ewr"   # Newark: nah an den US-Boersen, spart Latenz
+
+[build]
+  # Pfade sind relativ zum Projektstamm, wo diese Datei liegen MUSS: flyctl
+  # sucht fly.toml im Arbeitsverzeichnis. Lag sie unter deploy/, scheiterte
+  # `fly launch --copy-config` mit "missing an app name", weil es gar keine
+  # Konfiguration fand. Der Build-Kontext ist ebenfalls der Stamm -- das
+  # Dockerfile kopiert pyproject.toml und src/, die es unter deploy/ nicht
+  # gaebe.
+  dockerfile = "deploy/Dockerfile"
+
+[env]
+  MICRONALGO_BROKER = "alpaca"
+  MICRONALGO_ALPACA_BASE_URL = "https://paper-api.alpaca.markets"
+  # Ausdrueckliche Erklaerung "das ist ein Papierkonto". Getrennt von der URL,
+  # damit die Sicherung nie ueber eine Namensaehnlichkeit entscheidet -- und
+  # noetig, sobald Dein Endpunkt nicht paper-api.alpaca.markets heisst.
+  MICRONALGO_ALPACA_PAPER = "true"
+  MICRONALGO_SYMBOL = "MU"
+  # Anteil des Kapitals pro Position. 0.35 ist das Ergebnis der Groessentabelle
+  # im Bericht: der groesste Anteil, der den gemessenen Rueckgang von -54 %
+  # innerhalb von -30 % haelt. Hier ausgeschrieben statt auf den Default
+  # verlassen, weil der Wert die wichtigste Risikoentscheidung im Projekt ist.
+  MICRONALGO_CAPITAL_FRACTION = "0.35"
+  # Trockenlauf bleibt an, bis Du ihn bewusst abschaltest:
+  #   fly secrets set MICRONALGO_DRY_RUN=false
+  MICRONALGO_DRY_RUN = "true"
+
+[mounts]
+  source = "micronalgo_data"
+  destination = "/data"
+
+# Zwei Instanzen wuerden sich um dieselbe Position streiten. Der Instanz-Lock
+# im Code faengt das nur INNERHALB einer Maschine ab, ueber zwei Maschinen
+# hinweg greift er nicht. Was es hier verhindert, ist das Volume: ein
+# Fly-Volume laesst sich immer nur an eine Maschine haengen, also erzwingt das
+# eine `micronalgo_data` unten die eine Instanz. Pruefen mit `fly status` --
+# es darf genau eine Zeile stehen. Niemals `fly scale count 2`.
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"
+
+[processes]
+  app = "micronalgo paper"
+
+[deploy]
+  strategy = "immediate"   # kein rolling update: nie zwei Bots gleichzeitig

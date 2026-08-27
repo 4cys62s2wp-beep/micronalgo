@@ -29,6 +29,11 @@ on:
     - cron: "*/10 12-14 * * 1-5"   # Ausstiegsfenster + Kontrolle nach Eroeffnung
     - cron: "*/10 19-21 * * 1-5"   # Einstiegsfenster + Kontrolle nach Schluss
   workflow_dispatch:                # Knopf zum Sofortstart, auch in der GitHub-App
+    inputs:
+      probe_orders:
+        description: "Auktionsorders wirklich testen (1 Aktie einreichen und sofort stornieren). Nur zwischen 01:00 und 15:28 deutscher Zeit sinnvoll -- ausserhalb nimmt die Eroeffnungsauktion nichts an."
+        type: boolean
+        default: false
 
 # Zwei gleichzeitige Laeufe wuerden sich um dieselbe Position streiten. Der
 # Instanz-Lock im Code schuetzt nur innerhalb einer Maschine, also hier hart
@@ -147,7 +152,18 @@ jobs:
       - name: Preflight
         # Faellt der Preflight durch, wird NICHT gehandelt. Lieber eine
         # ausgelassene Sitzung als eine Order auf Basis einer kaputten Annahme.
-        run: micronalgo preflight
+        #
+        # --probe-orders reicht eine echte Auktionsorder ueber 1 Aktie ein und
+        # storniert sie sofort. Das ist der EINZIGE Weg, die Annahme zu pruefen,
+        # auf der alles ruht -- aber im Zehnminutentakt waere es Unfug, deshalb
+        # nur auf ausdruecklichen Knopfdruck.
+        run: |
+          set -eu
+          if [ "${{ inputs.probe_orders }}" = "true" ]; then
+            micronalgo preflight --probe-orders
+          else
+            micronalgo preflight
+          fi
 
       - name: Tick
         id: tick

@@ -247,7 +247,11 @@ class InstanceLock:
             self._fh = None
             raise RuntimeError(
                 f"another micronalgo instance holds {self.path} (pid {holder}). "
-                "Two bots sharing one state directory will disagree about the position."
+                "Two bots sharing one state directory will disagree about the position. "
+                "If the LaunchAgent is loaded, this is most likely a manual "
+                "`micronalgo paper` still running in a terminal -- stop that one, or "
+                "unload the agent with `launchctl unload "
+                "~/Library/LaunchAgents/com.micronalgo.paper.plist`."
             ) from None
         self._fh.seek(0)
         self._fh.truncate()

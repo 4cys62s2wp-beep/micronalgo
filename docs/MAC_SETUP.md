@@ -50,6 +50,14 @@ sofort; er verweigert sich selbst, wenn die Schlussauktion zu nah ist.
 
 ## 4. Dauerbetrieb per launchd
 
+**Vorher den Vordergrund-Bot beenden.** Laeuft noch ein `micronalgo paper` in
+einem Terminal, haelt es den Instanz-Lock, und der Agent kommt nicht an den
+Zustand heran: er beendet sich mit Code 2, launchd startet ihn nach 30 Sekunden
+neu, und das wiederholt sich, solange beide da sind. Gefaehrlich ist das nicht --
+der Lock ist genau dafuer da, dass nie zwei Bots dieselbe Position verwalten --
+aber `logs/launchd.err.log` fuellt sich mit derselben Meldung. Also erst Ctrl-C,
+dann installieren.
+
 ```bash
 sh deploy/install_mac.sh --launchd
 ```

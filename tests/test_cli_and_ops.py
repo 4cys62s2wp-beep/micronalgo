@@ -303,13 +303,28 @@ def test_cloud_deploy_artifacts_are_wellformed():
     assert "VOLUME" in dockerfile
     assert 'CMD ["micronalgo", "paper"]' in dockerfile, "dry-run must be the container default"
 
-    fly = tomllib.loads((root / "deploy" / "fly.toml").read_text())
+    # flyctl reads fly.toml from the working directory. Under deploy/ it found
+    # no config at all and failed with "missing an app name", which reads like
+    # a missing field rather than a missing file. The location is the contract.
+    fly_path = root / "fly.toml"
+    assert fly_path.exists(), "fly.toml must sit at the repository root, where flyctl looks"
+    assert not (root / "deploy" / "fly.toml").exists(), "one fly.toml, not two"
+
+    fly = tomllib.loads(fly_path.read_text())
     assert fly["env"]["MICRONALGO_DRY_RUN"] == "true"
     assert fly["mounts"]["destination"] == "/data"
     # Two instances would fight over one position; the in-process lock cannot
     # span machines, so the config must pin a single VM and forbid rolling.
     assert len(fly["vm"]) == 1
     assert fly["deploy"]["strategy"] == "immediate"
+    # The build context is the root, so the Dockerfile reference must be
+    # root-relative and must actually exist -- the COPY lines need pyproject.toml
+    # and src/, neither of which exists under deploy/.
+    assert (root / fly["build"]["dockerfile"]).exists(), "the [build] dockerfile path is broken"
+    # The size that keeps the measured drawdown inside the threshold. Spelled
+    # out rather than left to the default: it is the biggest risk decision here,
+    # and a deployed config should say what size it trades.
+    assert fly["env"]["MICRONALGO_CAPITAL_FRACTION"] == "0.35"
 
 
 def test_actions_workflow_is_wellformed():

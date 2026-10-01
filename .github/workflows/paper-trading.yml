@@ -20,14 +20,32 @@
 
 name: paper trading
 
+# ============================ PAUSIERT am 2026-09-30 ========================
+# Der Zeitplan ist auskommentiert. Es laeuft nichts mehr von selbst, und es
+# kommen keine Fehlermails mehr.
+#
+# WARUM: die Repository-Secrets waren nie hinterlegt. Alle 57 Laeufe brachen
+# nach acht Sekunden beim Schritt "Schluessel pruefen" ab -- gehandelt wurde
+# nie, weder echt noch trocken. Die einzige Wirkung war Post.
+#
+# WIEDER AUFNEHMEN, in dieser Reihenfolge:
+#   1. Settings -> Secrets and variables -> Actions:
+#        ALPACA_API_KEY_ID, ALPACA_API_SECRET_KEY
+#   2. Actions -> paper trading -> Run workflow: ein Lauf muss gruen sein.
+#   3. Erst dann die beiden cron-Zeilen unten entkommentieren.
+# Andersherum faengt genau dasselbe wieder an.
+#
+# Der Startknopf (workflow_dispatch) bleibt aktiv -- damit laesst sich Schritt 2
+# jederzeit von Hand ausloesen, ohne dass etwas nach Zeitplan laeuft.
+# ===========================================================================
 on:
-  schedule:
-    # Zeiten in UTC. Die Boerse rechnet in America/New_York, das je nach
-    # Sommer-/Winterzeit UTC-4 oder UTC-5 ist -- die Fenster unten decken
-    # BEIDE Faelle ab. Welche Sitzungszeiten wirklich gelten, entscheidet
-    # ohnehin der Kalender im Programm, nicht dieser Ausdruck.
-    - cron: "*/10 12-14 * * 1-5"   # Ausstiegsfenster + Kontrolle nach Eroeffnung
-    - cron: "*/10 19-21 * * 1-5"   # Einstiegsfenster + Kontrolle nach Schluss
+  # schedule:
+  #   # Zeiten in UTC. Die Boerse rechnet in America/New_York, das je nach
+  #   # Sommer-/Winterzeit UTC-4 oder UTC-5 ist -- die Fenster unten decken
+  #   # BEIDE Faelle ab. Welche Sitzungszeiten wirklich gelten, entscheidet
+  #   # ohnehin der Kalender im Programm, nicht dieser Ausdruck.
+  #   - cron: "*/10 12-14 * * 1-5"   # Ausstiegsfenster + Kontrolle nach Eroeffnung
+  #   - cron: "*/10 19-21 * * 1-5"   # Einstiegsfenster + Kontrolle nach Schluss
   workflow_dispatch:                # Knopf zum Sofortstart, auch in der GitHub-App
     inputs:
       probe_orders:
